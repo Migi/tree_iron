@@ -2,6 +2,7 @@
 /// It should be kept as small as possible.
 
 use std::iter::Iterator;
+use std::vec::Drain;
 
 pub struct Immutree<T> {
     data: Vec<NodeData<T>>,
@@ -148,12 +149,12 @@ pub struct ImmutreeNodeRefMut<'t, T> {
 impl<'t, T> Iterator for ImmutreeNodeIterMut<'t, T> {
     type Item = ImmutreeNodeRefMut<'t, T>;
     fn next(&mut self) -> Option<Self::Item> {
-        let remaining_nodes : &'t mut [NodeData<T>] = self.remaining_nodes;
-        remaining_nodes.get(0).map(
+        self.remaining_nodes.get(0).map(
             |cur_node| cur_node.num_descendants
         ).map(
             |num_descendants| {
                 let next_node = 1 + num_descendants;
+                let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []); // I'm not sure why this mem::replace is necessary but it seems to be
                 let (cur_node_slice, next_nodes_slice) = remaining_nodes.split_at_mut(next_node);
                 self.remaining_nodes = next_nodes_slice;
                 ImmutreeNodeRefMut {
@@ -165,30 +166,72 @@ impl<'t, T> Iterator for ImmutreeNodeIterMut<'t, T> {
 }
 
 impl<'t, T> ImmutreeNodeRefMut<'t, T> {
-    /*pub fn children(&mut self) -> ImmutreeNodeIterMut<'t, T> {
-        unsafe {
-            let num_children = {
-                self.tree.data.get_unchecked(self.index).num_children
-            };
-            ImmutreeNodeIterMut {
-                tree: self.tree,
-                cur_node_index: self.index + 1,
-                len: num_children
-            }
+    pub fn children(self) -> ImmutreeNodeIterMut<'t, T> {
+        let (_, remaining_nodes) = self.slice.split_first_mut().unwrap();
+        ImmutreeNodeIterMut {
+            remaining_nodes
         }
     }
 
     pub fn val(&self) -> &T {
         unsafe {
-            &self.tree.data.get_unchecked(self.index).val
+            &self.slice.get_unchecked(0).val
         }
     }
 
     pub fn val_mut(&mut self) -> &mut T {
         unsafe {
-            &mut self.tree.data.get_unchecked_mut(self.index).val
+            &mut self.slice.get_unchecked_mut(0).val
         }
-    }*/
+    }
+}
+
+pub struct ImmutreeNodeDrain<'t, T> {
+    drain: Drain<'t, NodeData<T>>, // contains (only) the nodes in the iterator and all their descendants
+}
+
+pub struct ImmutreeNodeDrain2<'t, T> {
+    slice: &'t mut [NodeData<T>], // contains (only) the current node and all its descendants
+}
+
+impl<'t, T> Iterator for ImmutreeNodeDrain<'t, T> {
+    type Item = ImmutreeNodeRefMut<'t, T>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.remaining_nodes.get(0).map(
+            |cur_node| cur_node.num_descendants
+        ).map(
+            |num_descendants| {
+                let next_node = 1 + num_descendants;
+                let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []); // I'm not sure why this mem::replace is necessary but it seems to be
+                let (cur_node_slice, next_nodes_slice) = remaining_nodes.split_at_mut(next_node);
+                self.remaining_nodes = next_nodes_slice;
+                ImmutreeNodeRefMut {
+                    slice: cur_node_slice
+                }
+            }
+        )
+    }
+}
+
+impl<'t, T> ImmutreeNodeRefMut<'t, T> {
+    pub fn children(self) -> ImmutreeNodeIterMut<'t, T> {
+        let (_, remaining_nodes) = self.slice.split_first_mut().unwrap();
+        ImmutreeNodeIterMut {
+            remaining_nodes
+        }
+    }
+
+    pub fn val(&self) -> &T {
+        unsafe {
+            &self.slice.get_unchecked(0).val
+        }
+    }
+
+    pub fn val_mut(&mut self) -> &mut T {
+        unsafe {
+            &mut self.slice.get_unchecked_mut(0).val
+        }
+    }
 }
 
 #[cfg(test)]
