@@ -60,9 +60,13 @@ impl<T> Immutree<T> {
         let data = std::mem::replace(&mut self.data, Vec::new());
         ImmutreeDrain { data, drop_from: 0 }
     }
+    
+    pub(crate) fn data(&self) -> &Vec<ManuallyDrop<NodeData<T>>> {
+        &self.data
+    }
 }
 
-struct NodeData<T> {
+pub(crate) struct NodeData<T> {
     val: T,
     next_sibling_offset: Option<NonZeroUsize> // Difference between the index of the next sibling and the index of the current node. None if there is no next sibling.
 }
