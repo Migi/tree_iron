@@ -1,11 +1,12 @@
 /// Core contains all the unsafe code.
 /// It should be kept as small as possible.
-use std::iter::{ExactSizeIterator, Iterator};
+use std::iter::Iterator;
 use std::mem::ManuallyDrop;
+use std::num::NonZeroUsize;
 
+/// test
 pub struct Immutree<T> {
     data: Vec<ManuallyDrop<NodeData<T>>>, // all data is dropped in drop(), only drain() prevents this
-    num_root_nodes: usize,
 }
 
 impl<T> Drop for Immutree<T> {
@@ -22,14 +23,12 @@ impl<T> Immutree<T> {
     pub fn new() -> Immutree<T> {
         Immutree {
             data: Vec::new(),
-            num_root_nodes: 0,
         }
     }
 
     pub fn with_capacity(capacity: usize) -> Immutree<T> {
         Immutree {
             data: Vec::with_capacity(capacity),
-            num_root_nodes: 0,
         }
     }
 
@@ -38,20 +37,16 @@ impl<T> Immutree<T> {
         val: T,
         child_builder_cb: impl FnOnce(&mut ImmutreeNodeBuilder<T>) -> R,
     ) -> R {
-        self.num_root_nodes += 1;
         let mut node_builder = ImmutreeNodeBuilder {
             tree: self,
-            num_children: 0,
-            num_descendants: 0,
+            last_added_child_index: None
         };
         node_builder.build_child(val, child_builder_cb)
     }
 
     pub fn iter(&self) -> ImmutreeNodeIter<T> {
         ImmutreeNodeIter {
-            tree: self,
-            cur_node_index: 0,
-            len: self.num_root_nodes
+            remaining_nodes: &self.data,
         }
     }
 
@@ -67,16 +62,15 @@ impl<T> Immutree<T> {
     }
 }
 
-pub struct NodeData<T> {
+struct NodeData<T> {
     val: T,
-    num_children: usize,
-    num_descendants: usize,
+    next_sibling_offset: Option<NonZeroUsize> // Difference between the index of the next sibling and the index of the current node. None if there is no next sibling.
 }
 
+/// test
 pub struct ImmutreeNodeBuilder<'a, T> {
     tree: &'a mut Immutree<T>,
-    num_children: usize,
-    num_descendants: usize,
+    last_added_child_index: Option<usize>, // to update next_sibling_offset
 }
 
 impl<'a, T> ImmutreeNodeBuilder<'a, T> {
@@ -92,85 +86,70 @@ impl<'a, T> ImmutreeNodeBuilder<'a, T> {
         let child_node_index = self.tree.data.len();
         self.tree.data.push(ManuallyDrop::new(NodeData {
             val,
-            num_children: 0,
-            num_descendants: 0,
+            next_sibling_offset: None,
         }));
-        let (child_num_children, child_num_descendants, ret) = {
-            let mut child_node_builder = ImmutreeNodeBuilder {
-                tree: self.tree,
-                num_children: 0,
-                num_descendants: 0,
-            };
-            let ret = child_builder_cb(&mut child_node_builder);
-            (
-                child_node_builder.num_children,
-                child_node_builder.num_descendants,
-                ret,
-            )
-        };
-        self.num_children += 1;
-        self.num_descendants += 1 + child_num_descendants;
-        unsafe {
-            let child_node = self.tree.data.get_unchecked_mut(child_node_index);
-            child_node.num_children = child_num_children;
-            child_node.num_descendants = child_num_descendants;
+
+        // update next_sibling_offset of the last added node (if any)
+        if let Some(last_added_child_index) = self.last_added_child_index {
+            debug_assert!(last_added_child_index < child_node_index);
+            let offset = child_node_index - last_added_child_index;
+            debug_assert!(offset != 0);
+            unsafe {
+                self.tree.data.get_unchecked_mut(last_added_child_index).next_sibling_offset = Some(NonZeroUsize::new_unchecked(offset));
+            }
         }
-        ret
+        self.last_added_child_index = Some(child_node_index);
+
+        let mut child_node_builder = ImmutreeNodeBuilder {
+            tree: self.tree,
+            last_added_child_index: None,
+        };
+        child_builder_cb(&mut child_node_builder)
     }
 }
 
+/// test
 pub struct ImmutreeNodeIter<'t, T> {
-    tree: &'t Immutree<T>,
-    cur_node_index: usize,
-    len: usize, // num remaining nodes in this iterator
+    remaining_nodes: &'t [ManuallyDrop<NodeData<T>>], // contains (only) the nodes in the iterator and all their descendants
 }
 
+/// test
 pub struct ImmutreeNodeRef<'t, T> {
-    tree: &'t Immutree<T>,
-    index: usize,
+    slice: &'t [ManuallyDrop<NodeData<T>>], // contains (only) the current node and all its descendants
 }
 
 impl<'t, T> Iterator for ImmutreeNodeIter<'t, T> {
     type Item = ImmutreeNodeRef<'t, T>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.len == 0 {
-            None
-        } else {
-            let result_node_index = self.cur_node_index;
-            // update cur_node_index
-            unsafe {
-                let cur_node = self.tree.data.get_unchecked(result_node_index);
-                self.cur_node_index += 1 + cur_node.num_descendants;
-                self.len -= 1;
-            }
-            Some(ImmutreeNodeRef {
-                tree: self.tree,
-                index: result_node_index,
+        self.remaining_nodes
+            .get(0)
+            .map(|cur_node| {
+                if let Some(next_sibling_offset) = cur_node.next_sibling_offset {
+                    let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &[]);
+                    let (cur_node_slice, next_nodes_slice) = remaining_nodes.split_at(next_sibling_offset.get());
+                    self.remaining_nodes = next_nodes_slice;
+                    ImmutreeNodeRef {
+                        slice: cur_node_slice,
+                    }
+                } else {
+                    let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &[]);
+                    ImmutreeNodeRef {
+                        slice: remaining_nodes,
+                    }
+                }
             })
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.len, Some(self.len))
     }
 }
 
-impl<'t, T> ExactSizeIterator for ImmutreeNodeIter<'t, T> {}
-
 impl<'t, T> ImmutreeNodeRef<'t, T> {
-    pub fn children(&self) -> ImmutreeNodeIter<'t, T> {
-        unsafe {
-            let node = self.tree.data.get_unchecked(self.index);
-            ImmutreeNodeIter {
-                tree: self.tree,
-                cur_node_index: self.index + 1,
-                len: node.num_children,
-            }
-        }
+    pub fn children(self) -> ImmutreeNodeIter<'t, T> {
+        let (_, remaining_nodes) = self.slice.split_first().unwrap();
+        ImmutreeNodeIter { remaining_nodes }
     }
 
-    pub fn val(&self) -> &'t T {
-        unsafe { &self.tree.data.get_unchecked(self.index).val }
+    pub fn val(&self) -> &T {
+        debug_assert!(self.slice.len() > 0);
+        unsafe { &self.slice.get_unchecked(0).val }
     }
 }
 
@@ -187,14 +166,20 @@ impl<'t, T> Iterator for ImmutreeNodeIterMut<'t, T> {
     fn next(&mut self) -> Option<Self::Item> {
         self.remaining_nodes
             .get(0)
-            .map(|cur_node| cur_node.num_descendants)
-            .map(|num_descendants| {
-                let next_node = 1 + num_descendants;
-                let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
-                let (cur_node_slice, next_nodes_slice) = remaining_nodes.split_at_mut(next_node);
-                self.remaining_nodes = next_nodes_slice;
-                ImmutreeNodeRefMut {
-                    slice: cur_node_slice,
+            .map(|cur_node| cur_node.next_sibling_offset)
+            .map(|maybe_next_sibling_offset| {
+                if let Some(next_sibling_offset) = maybe_next_sibling_offset {
+                    let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
+                    let (cur_node_slice, next_nodes_slice) = remaining_nodes.split_at_mut(next_sibling_offset.get());
+                    self.remaining_nodes = next_nodes_slice;
+                    ImmutreeNodeRefMut {
+                        slice: cur_node_slice,
+                    }
+                } else {
+                    let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
+                    ImmutreeNodeRefMut {
+                        slice: remaining_nodes,
+                    }
                 }
             })
     }
@@ -207,10 +192,12 @@ impl<'t, T> ImmutreeNodeRefMut<'t, T> {
     }
 
     pub fn val(&self) -> &T {
+        debug_assert!(self.slice.len() > 0);
         unsafe { &self.slice.get_unchecked(0).val }
     }
 
     pub fn val_mut(&mut self) -> &mut T {
+        debug_assert!(self.slice.len() > 0);
         unsafe { &mut self.slice.get_unchecked_mut(0).val }
     }
 }
@@ -273,14 +260,20 @@ impl<'t, T> Iterator for ImmutreeNodeListDrain<'t, T> {
     fn next(&mut self) -> Option<Self::Item> {
         self.remaining_nodes
             .get(0)
-            .map(|cur_node| cur_node.num_descendants)
-            .map(|num_descendants| {
-                let next_node = 1 + num_descendants;
-                let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
-                let (cur_node_slice, next_nodes_slice) = remaining_nodes.split_at_mut(next_node);
-                self.remaining_nodes = next_nodes_slice;
-                ImmutreeSingleNodeDrain {
-                    slice: cur_node_slice,
+            .map(|cur_node| cur_node.next_sibling_offset)
+            .map(|maybe_next_sibling_offset| {
+                if let Some(next_sibling_offset) = maybe_next_sibling_offset {
+                    let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
+                    let (cur_node_slice, next_nodes_slice) = remaining_nodes.split_at_mut(next_sibling_offset.get());
+                    self.remaining_nodes = next_nodes_slice;
+                    ImmutreeSingleNodeDrain {
+                        slice: cur_node_slice,
+                    }
+                } else {
+                    let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
+                    ImmutreeSingleNodeDrain {
+                        slice: remaining_nodes,
+                    }
                 }
             })
     }
@@ -297,10 +290,12 @@ impl<'t, T> ImmutreeSingleNodeDrain<'t, T> {
     }
 
     pub fn val(&self) -> &T {
+        debug_assert!(self.slice.len() > 0);
         unsafe { &self.slice.get_unchecked(0).val }
     }
 
     pub fn val_mut(&mut self) -> &mut T {
+        debug_assert!(self.slice.len() > 0);
         unsafe { &mut self.slice.get_unchecked_mut(0).val }
     }
 }
