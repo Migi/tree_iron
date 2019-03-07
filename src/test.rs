@@ -190,31 +190,32 @@ mod tests {
 
 	use crate::*;
 
-	fn build_tree(test: Arc<CheckedTest>) -> Immutree<Checked<i32>> {
-		let mut tree = Immutree::new();
-		tree.build_root_node(Checked::new(2, test.clone()), |node| {
-			node.build_child(Checked::new(10, test.clone()), |node| {
+	fn build_store(test: Arc<CheckedTest>) -> TreeStore<Checked<i32>> {
+		let mut store = TreeStore::new();
+		store.add_tree(Checked::new(1, test.clone()), |mut node| {
+			node.add_child(Checked::new(10, test.clone()), |mut node| {
 				node.add_leaf_child(Checked::new(11, test.clone()));
 				node.add_leaf_child(Checked::new(12, test.clone()));
 				node.add_leaf_child(Checked::new(13, test.clone()));
 			});
 			node.add_leaf_child(Checked::new(20, test.clone()));
-			node.build_child(Checked::new(30, test.clone()), |node| {
+			node.add_child(Checked::new(30, test.clone()), |mut node| {
 				node.add_leaf_child(Checked::new(31, test.clone()));
 				node.add_leaf_child(Checked::new(32, test.clone()));
 				node.add_leaf_child(Checked::new(33, test.clone()));
 			});
+			*node.val_mut() = Checked::new(2, test.clone());
 		});
-		tree
+		store
 	}
 
 	#[test]
-	fn test_iter_tree() {
+	fn test_iter() {
 		let test = Arc::new(CheckedTest::new());
 		{
-			let tree = build_tree(test.clone());
+			let store = build_store(test.clone());
 
-			let mut iter = tree.iter();
+			let mut iter = store.iter_trees();
 			let node = iter.next().unwrap();
 			assert_eq!(*node.val().get(), 2);
 			{
@@ -269,12 +270,12 @@ mod tests {
 	}
 
 	#[test]
-	fn test_iter_tree_mut_but_only_read() {
+	fn test_iter_mut_but_only_read() {
 		let test = Arc::new(CheckedTest::new());
 		{
-			let mut tree = build_tree(test.clone());
+			let mut store = build_store(test.clone());
 
-			let mut iter = tree.iter_mut();
+			let mut iter = store.iter_trees_mut();
 			let node = iter.next().unwrap();
 			assert_eq!(*node.val().get(), 2);
 			{
@@ -329,12 +330,12 @@ mod tests {
 	}
 
 	#[test]
-	fn test_iter_tree_mut() {
+	fn test_iter_mut() {
 		let test = Arc::new(CheckedTest::new());
 		{
-			let mut tree = build_tree(test.clone());
+			let mut store = build_store(test.clone());
 
-			let mut iter = tree.iter_mut();
+			let mut iter = store.iter_trees_mut();
 			let mut node = iter.next().unwrap();
 			assert_eq!(*node.val_mut().get_mut(), 2);
 			{
@@ -389,12 +390,12 @@ mod tests {
 	}
 
 	#[test]
-	fn test_drain_tree() {
+	fn test_drain() {
 		let test = Arc::new(CheckedTest::new());
 		{
-			let tree = build_tree(test.clone());
+			let store = build_store(test.clone());
 			
-			let mut drain = tree.drain();
+			let mut drain = store.drain_trees();
 			let mut iter = drain.drain_all();
 			let (val,sub_children) = iter.next().unwrap().into_val_and_children();
 			assert_eq!(*val.get(), 2);
@@ -449,22 +450,22 @@ mod tests {
 	}
 
 	#[test]
-	fn test_drain_tree_but_dont() {
+	fn test_drain_create_only() {
 		let test = Arc::new(CheckedTest::new());
 		{
-			let tree = build_tree(test.clone());
-			let _drain = tree.drain();
+			let store = build_store(test.clone());
+			let _drain = store.drain_trees();
 		}
 		assert_eq!(test.num_undropped(), 0);
 	}
 
 	#[test]
-	fn test_drain_tree_halfway() {
+	fn test_drain_halfway() {
 		let test = Arc::new(CheckedTest::new());
 		{
-			let tree = build_tree(test.clone());
+			let store = build_store(test.clone());
 			
-			let mut drain = tree.drain();
+			let mut drain = store.drain_trees();
 			let mut iter = drain.drain_all();
 			let (val,sub_children) = iter.next().unwrap().into_val_and_children();
 			assert_eq!(*val.get(), 2);
@@ -490,12 +491,12 @@ mod tests {
 	}
 
 	#[test]
-	fn test_drain_tree_only_last_half() {
+	fn test_drain_only_last_half() {
 		let test = Arc::new(CheckedTest::new());
 		{
-			let tree = build_tree(test.clone());
+			let store = build_store(test.clone());
 			
-			let mut drain = tree.drain();
+			let mut drain = store.drain_trees();
 			let mut iter = drain.drain_all();
 			let (val,sub_children) = iter.next().unwrap().into_val_and_children();
 			assert_eq!(*val.get(), 2);

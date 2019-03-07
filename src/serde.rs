@@ -1,6 +1,7 @@
 #[cfg(feature = "serde")]
 use serde::{Serialize, Deserialize};
 
+#[cfg(feature = "serde")]
 use crate::*;
 
 #[cfg(feature = "serde")]
@@ -9,6 +10,8 @@ impl<T: Serialize> Serialize for Immutree<T> {
     where
         S: Serializer,
     {
+		let iter = self.iter();
+
 		let data = self.data();
 		let mut seq = serializer.serialize_seq(Some(data.len()))?;
 		for node in data {
@@ -17,6 +20,14 @@ impl<T: Serialize> Serialize for Immutree<T> {
 		}
 		seq.end();
     }
+}
+
+#[cfg(feature = "serde")]
+fn serialize_node_list<T: Serialize, S: Serializer>(iter: ImmutreeNodeIter, serializer: S) -> Result<S::Ok, S::Error> {
+	let mut seq = serializer.serialize_seq(Some(data.len()))?;
+	for node in iter {
+	}
+	seq.end();
 }
 
 #[cfg(feature = "serde")]
