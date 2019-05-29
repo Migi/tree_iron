@@ -61,11 +61,26 @@ impl<T> TreeStore<T> {
         let data = std::mem::replace(&mut self.data, Vec::new());
         TreeDrain { data, drop_from: 0 }
     }
+
+    /// Read-only view of the raw data.
+    pub fn raw_data(&self) -> &Vec<ManuallyDrop<NodeData<T>>> {
+        &self.data
+    }
 }
 
-struct NodeData<T> {
+pub struct NodeData<T> {
     val: T,
     next_sibling_offset: Option<NonZeroUsize> // Difference between the index of the next sibling and the index of the current node. None if there is no next sibling.
+}
+
+impl<T> NodeData<T> {
+    pub fn val(&self) -> &T {
+        &self.val
+    }
+
+    pub fn next_sibling_offset(&self) -> Option<NonZeroUsize> {
+        self.next_sibling_offset
+    }
 }
 
 /// test
@@ -123,11 +138,21 @@ impl<'a, T> NodeBuilder<'a, T> {
 }
 
 /// test
+#[derive(Copy)]
 pub struct NodeIter<'t, T> {
     remaining_nodes: &'t [ManuallyDrop<NodeData<T>>], // contains (only) the nodes in the iterator and all their descendants
 }
 
+impl<'t, T> Clone for NodeIter<'t, T> {
+    fn clone(&self) -> Self {
+        Self {
+            remaining_nodes: self.remaining_nodes
+        }
+    }
+}
+
 /// test
+#[derive(Clone,Copy)]
 pub struct NodeRef<'t, T> {
     slice: &'t [ManuallyDrop<NodeData<T>>], // contains (only) the current node and all its descendants
 }
@@ -156,7 +181,7 @@ impl<'t, T> Iterator for NodeIter<'t, T> {
 }
 
 impl<'t, T> NodeRef<'t, T> {
-    pub fn children(self) -> NodeIter<'t, T> {
+    pub fn children(&self) -> NodeIter<'t, T> {
         let (_, remaining_nodes) = self.slice.split_first().unwrap();
         NodeIter { remaining_nodes }
     }
