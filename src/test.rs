@@ -200,17 +200,17 @@ mod tests {
 
     fn build_store(test: Arc<CheckedTest>) -> TreeStore<Checked<i32>> {
         let mut store = TreeStore::new();
-        store.add_tree(Checked::new(1, test.clone()), |mut node| {
-            node.add_child(Checked::new(10, test.clone()), |mut node| {
-                node.add_leaf_child(Checked::new(11, test.clone()));
-                node.add_leaf_child(Checked::new(12, test.clone()));
-                node.add_leaf_child(Checked::new(13, test.clone()));
+        store.build_tree(Checked::new(1, test.clone()), |mut node| {
+            node.build_child(Checked::new(10, test.clone()), |mut node| {
+                node.add_child(Checked::new(11, test.clone()));
+                node.add_child(Checked::new(12, test.clone()));
+                node.add_child(Checked::new(13, test.clone()));
             });
-            node.add_leaf_child(Checked::new(20, test.clone()));
-            node.add_child(Checked::new(30, test.clone()), |mut node| {
-                node.add_leaf_child(Checked::new(31, test.clone()));
-                node.add_leaf_child(Checked::new(32, test.clone()));
-                node.add_leaf_child(Checked::new(33, test.clone()));
+            node.add_child(Checked::new(20, test.clone()));
+            node.build_child(Checked::new(30, test.clone()), |mut node| {
+                node.add_child(Checked::new(31, test.clone()));
+                node.add_child(Checked::new(32, test.clone()));
+                node.add_child(Checked::new(33, test.clone()));
             });
             *node.val_mut() = Checked::new(2, test.clone());
         });
