@@ -37,19 +37,24 @@ impl<T> TreeStore<T> {
         initial_val: T,
         node_builder_cb: impl FnOnce(NodeBuilder<T>) -> R,
     ) -> R {
-        node_builder_cb(self.build_child(initial_val))
+        node_builder_cb(self.add_tree(initial_val))
     }
 
     pub fn add_tree<'a>(
         &'a mut self,
         initial_val: T
     ) -> NodeBuilder<'a,T> {
-        let mut node_builder = NodeBuilder {
+        let child_node_index = self.data.len();
+        self.data.push(ManuallyDrop::new(NodeData {
+            val: initial_val,
+            next_sibling_offset: None,
+        }));
+
+        NodeBuilder {
             store: self,
-            index: 0, // this index is wrong, but `index` is not used in build_child()
-            last_added_child_index: None
-        };
-        node_builder.build_child(initial_val, node_builder_cb)
+            index: child_node_index,
+            last_added_child_index: None,
+        }
     }
 
     pub fn iter_trees(&self) -> NodeIter<T> {
@@ -115,13 +120,16 @@ impl<'a, T> NodeBuilder<'a, T> {
         initial_val: T,
         child_builder_cb: impl FnOnce(NodeBuilder<T>) -> R,
     ) -> R {
-        child_builder_cb(self.build_child(initial_val))
+        child_builder_cb(self.add_child(initial_val))
     }
 
-    pub fn add_child<'a>(
-        &'a mut self,
+    pub fn add_child<'b>(
+        &'b mut self,
         initial_val: T
-    ) -> NodeBuilder<'a,T> {
+    ) -> NodeBuilder<'b,T>
+    where
+        'a: 'b
+    {
         let child_node_index = self.store.data.len();
         self.store.data.push(ManuallyDrop::new(NodeData {
             val: initial_val,

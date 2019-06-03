@@ -27,20 +27,27 @@ impl<T> ExactSizeTreeStore<T> {
         }
     }
 
-    pub fn add_tree<R>(
+    pub fn build_tree<R>(
         &mut self,
         initial_val: T,
         node_builder_cb: impl FnOnce(ExactSizeNodeBuilder<T>) -> R,
     ) -> R {
+        node_builder_cb(self.add_tree(initial_val))
+    }
+
+    pub fn add_tree(
+        &mut self,
+        initial_val: T,
+    ) -> ExactSizeNodeBuilder<T> {
         self.num_trees += 1;
 
         let exact_size = ExactSize {
             val: initial_val,
             num_children: 0,
         };
-        self.store.add_tree(exact_size, move |node_builder| {
-            node_builder_cb(ExactSizeNodeBuilder { node_builder })
-        })
+        ExactSizeNodeBuilder { 
+            node_builder: self.store.add_tree(exact_size)
+        }
     }
 
     pub fn num_trees(&self) -> usize {
@@ -89,25 +96,28 @@ impl<'a, T> ExactSizeNodeBuilder<'a, T> {
         self.node_builder.val().num_children
     }
 
-    pub fn add_leaf_child(&mut self, val: T) {
-        self.add_child(val, |_| {});
-    }
-
-    pub fn add_child<R>(
+    pub fn build_child<R>(
         &mut self,
         initial_val: T,
         child_builder_cb: impl FnOnce(ExactSizeNodeBuilder<T>) -> R,
     ) -> R {
+        child_builder_cb(self.add_child(initial_val))
+    }
+
+    pub fn add_child(
+        &mut self,
+        initial_val: T,
+    ) -> ExactSizeNodeBuilder<T> {
         self.node_builder.val_mut().num_children += 1;
 
         let exact_size = ExactSize {
             val: initial_val,
             num_children: 0,
         };
-        self.node_builder
-            .add_child(exact_size, move |node_builder| {
-                child_builder_cb(ExactSizeNodeBuilder { node_builder })
-            })
+        ExactSizeNodeBuilder {
+            node_builder: self.node_builder
+                .add_child(exact_size)
+        }
     }
 }
 
