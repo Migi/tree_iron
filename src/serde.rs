@@ -50,9 +50,10 @@ impl<'t, T: Serialize> Serialize for NodeIter<'t, T> {
     }
 }
 
-static RECURSIVE_NODE_STRUCT_NAME: &str = "RecNode";
-static RECURSIVE_NODE_FIELD_VAL: &str = "val";
-static RECURSIVE_NODE_FIELD_CHILDREN: &str = "children";
+static const RECURSIVE_NODE_STRUCT_NAME: &str = "RecNode";
+static const RECURSIVE_NODE_FIELD_VAL: &str = "val";
+static const RECURSIVE_NODE_FIELD_CHILDREN: &str = "children";
+static const RECURSIVE_NODE_FIELDS: &'static [&'static str] = &[RECURSIVE_NODE_FIELD_VAL, RECURSIVE_NODE_FIELD_CHILDREN];
 
 enum RecursiveNodeField {
     Val,
@@ -102,11 +103,105 @@ impl<'de, T: Deserialize> Deserialize<'de> for TreeStore<T> {
         if deserializer.is_human_readable() {
             let mut result = TreeStore::new();
 
-            struct DeserializingTree<'a, T: 'a>{
+            struct RecNodeDeserializer<'a, T: 'a>{
+                node_builder: NodeBuilder<'a, T>
+            }
+
+            impl<'de, 'a, T> DeserializeSeed<'de> for RecNodeDeserializer<'a, T>
+            where
+                T: Deserialize<'de>,
+            {
+                type Value = ();
+
+                fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+                where
+                    D: Deserializer<'de>,
+                {
+                    deserializer.deserialize_struct(RECURSIVE_NODE_STRUCT_NAME, RECURSIVE_NODE_FIELDS, self)
+                }
+            }
+
+            impl<'de, 'a, T> Visitor<'de> for RecNodeDeserializer<'a, T>
+            where
+                T: Deserialize<'de>,
+            {
+                type Value = ();
+
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    write!(formatter, "struct RecNode")
+                }
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
+                where
+                    A: SeqAccess<'de>,
+                {
+                    let val = seq.next_element()?
+                        .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+
+                    self.node_builder.add_child(val, move |node_builder| {
+                        seq.next_element_seed(ChildrenDeserializer {
+                            node_builder: self.node_builder
+                        })?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                    })?;
+                    
+                    Ok(())
+                }
+            }
+
+            struct ChildrenDeserializer<'a, T: 'a>{
+                node_builder: NodeBuilder<'a, T>
+            }
+
+            impl<'de, 'a, T> DeserializeSeed<'de> for ChildrenDeserializer<'a, T>
+            where
+                T: Deserialize<'de>,
+            {
+                type Value = ();
+
+                fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+                where
+                    D: Deserializer<'de>,
+                {
+                    deserializer.deserialize_seq(self)
+                }
+            }
+
+            impl<'de, 'a, T> Visitor<'de> for ChildrenDeserializer<'a, T>
+            where
+                T: Deserialize<'de>,
+            {
+                type Value = ();
+
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    write!(formatter, "a sequence of RecNode structs")
+                }
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
+                where
+                    A: SeqAccess<'de>,
+                {
+                    while let Some(_el) = seq.next_element_seed(RecNodeDeserializer {
+                        node_builder: self.node_builder
+                    })
+
+                    let val = seq.next_element()?
+                        .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+
+                    self.node_builder.add_child(val, move |node_builder| {
+                        seq.next_element_seed::<>(ChildrenDeserializer {
+                            node_builder: self.node_builder
+                        })?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                    })?;
+                    
+                    Ok(())
+                }
+            }
+
+            struct RootNodeDeserializer<'a, T: 'a>{
                 tree_store_mut_ref: &'a mut TreeStore<T>
             }
 
-            impl<'de, 'a, T> DeserializeSeed<'de> for DeserializingTree<'a, T>
+            impl<'de, 'a, T> DeserializeSeed<'de> for RootNodeDeserializer<'a, T>
             where
                 T: Deserialize<'de>,
             {
@@ -125,7 +220,7 @@ impl<'de, T: Deserialize> Deserialize<'de> for TreeStore<T> {
                         type Value = ();
 
                         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                            write!(formatter, "an array of integers (???)")
+                            write!(formatter, "struct RecNode (root node)")
                         }
 
                         fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
@@ -136,7 +231,7 @@ impl<'de, T: Deserialize> Deserialize<'de> for TreeStore<T> {
                                 .ok_or_else(|| de::Error::invalid_length(0, &self))?;
 
                             self.tree_store_mut_ref.add_tree(val, |mut node| {
-
+                                
                             });
                             let children = seq.next_element()?
                                 .ok_or_else(|| de::Error::invalid_length(1, &self))?;
@@ -166,8 +261,7 @@ impl<'de, T: Deserialize> Deserialize<'de> for TreeStore<T> {
                 where
                     V: SeqAccess<'de>,
                 {
-                    while let Some(el) = seq.next_element()? {
-                        
+                    while let Some(_el) = seq.next_element_seed::<RootNodeDeserializer>()? {
                     }
                 }
             }
