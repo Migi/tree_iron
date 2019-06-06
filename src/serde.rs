@@ -22,7 +22,7 @@ impl<T: Serialize> Serialize for TreeStore<T> {
     where
         S: Serializer,
     {
-        if !serializer.is_human_readable() {
+        if serializer.is_human_readable() {
             let mut seq = serializer.serialize_seq(None)?;
             for node in self.iter_trees() {
                 seq.serialize_element(&node)?;
@@ -85,7 +85,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for TreeStore<T> {
     where
         D: Deserializer<'de>
     {
-        if !deserializer.is_human_readable() {
+        if deserializer.is_human_readable() {
             struct RecNodeDeserializer<'a, 'b : 'a, T>{
                 node_builder: &'a mut NodeBuilder<'b, T>
             }
@@ -296,26 +296,59 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for TreeStore<T> {
                 where
                     A: SeqAccess<'de>,
                 {
-                    // returns number of elements read from the list
-                    fn rec_add_children_until_offset<'a,'de,T: Deserialize<'de>,A:SeqAccess<'de>>(seq: &mut A, offset: usize, mut node_builder: NodeBuilder<'a,T>) -> Result<usize, A::Error> {
-                        let mut num_read = 0;
-                        while let Some(node) = seq.next_element::<FlatNode<T>>()? {
-                            let node_builder_rec = node_builder.add_child(node.val);
-                            let num_read_rec = rec_add_children_until_offset(seq, node.offset, node_builder_rec)?;
-                            num_read += num_read_rec;
-                            if offset == 0 || num_read == offset {
-                                break;
-                            } else if num_read > offset {
-                                return Err(de::Error::invalid_length(num_read, &"wrong offset"));
+                    // reads n elements from the SeqAccess and adds them as nodes to the node_builder
+                    // if n is None, reads all elements until the end of the stream
+                    fn rec_add_n_children<'a,'de,T: Deserialize<'de>,A:SeqAccess<'de>>(seq: &mut A, n: Option<usize>, mut node_builder: NodeBuilder<'a,T>) -> Result<(), A::Error> {
+                        match n {
+                            Some(n) => {
+                                let mut num_read = 0;
+                                while num_read < n {
+                                    if let Some(node) = seq.next_element::<FlatNode<T>>()? {
+                                        num_read += 1;
+                                        let max_num_left_to_read = n-num_read;
+                                        let n_rec = {
+                                            if node.offset == 0 {
+                                                max_num_left_to_read
+                                            } else {
+                                                if node.offset-1 > max_num_left_to_read {
+                                                    return Err(de::Error::invalid_length(num_read, &"offset invalid"));
+                                                }
+                                                node.offset-1
+                                            }
+                                        };
+                                        let node_builder_rec = node_builder.add_child(node.val);
+                                        rec_add_n_children(seq, Some(n_rec), node_builder_rec)?;
+                                        num_read += n_rec;
+                                    } else {
+                                        return Err(de::Error::invalid_length(num_read, &"offset too large"));
+                                    }
+                                }
+                            },
+                            None => {
+                                while let Some(node) = seq.next_element::<FlatNode<T>>()? {
+                                    let n_rec = {
+                                        if node.offset == 0 {
+                                            None
+                                        } else {
+                                            Some(node.offset-1)
+                                        }
+                                    };
+                                    let node_builder_rec = node_builder.add_child(node.val);
+                                    rec_add_n_children(seq, n_rec, node_builder_rec)?;
+                                }
                             }
                         }
-                        Ok(num_read)
+                        Ok(())
                     }
 
                     while let Some(node) = seq.next_element::<FlatNode<T>>()? {
                         let offset = node.offset;
                         let tree_builder = self.tree_store_mut_ref.add_tree(node.val);
-                        rec_add_children_until_offset(&mut seq, offset, tree_builder)?;
+                        if offset == 0 {
+                            rec_add_n_children(&mut seq, None, tree_builder)?;
+                        } else {
+                            rec_add_n_children(&mut seq, Some(offset-1), tree_builder)?;
+                        }
                     }
                     
                     Ok(())
@@ -339,7 +372,7 @@ mod tests {
 
     fn build_store() -> TreeStore<i32> {
         let mut store = TreeStore::new();
-        store.build_tree(1, |mut node| {
+        store.build_tree(2, |mut node| {
             node.build_child(10, |mut node| {
                 node.add_child(11);
                 node.add_child(12);
@@ -352,16 +385,33 @@ mod tests {
                 node.add_child(33);
             });
         });
+        store.build_tree(3, |mut node| {
+            node.add_child(10);
+            node.build_child(20, |mut node| {
+                node.add_child(21);
+                node.add_child(22);
+                node.add_child(23);
+            });
+            node.add_child(30);
+        });
         store
     }
 
     #[test]
-    fn test_iter() {
+    fn test_json() {
         let store = build_store();
         let str = ::serde_json::ser::to_string(&store).unwrap();
-        println!("{}", str);
         let store2 : TreeStore<i32> = ::serde_json::from_str(&str).unwrap();
         let str2 = ::serde_json::ser::to_string(&store2).unwrap();
         assert_eq!(str, str2);
+    }
+
+    #[test]
+    fn test_bincode() {
+        let store = build_store();
+        let vec = ::bincode::serialize(&store).unwrap();
+        let store2 : TreeStore<i32> = ::bincode::deserialize(&vec[..]).unwrap();
+        let vec2 = ::bincode::serialize(&store2).unwrap();
+        assert_eq!(vec, vec2);
     }
 }

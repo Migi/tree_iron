@@ -7,6 +7,7 @@ use std::num::NonZeroUsize;
 /// test
 pub struct TreeStore<T> {
     data: Vec<ManuallyDrop<NodeData<T>>>, // all data is dropped in drop(), only drain() prevents this
+    last_added_root_node_index: usize, // used to update `next_sibling_offset` of the last root node when adding a tree. Only valid when data.len() > 0
 }
 
 impl<T> Drop for TreeStore<T> {
@@ -23,12 +24,14 @@ impl<T> TreeStore<T> {
     pub fn new() -> TreeStore<T> {
         TreeStore {
             data: Vec::new(),
+            last_added_root_node_index: 0
         }
     }
 
     pub fn with_capacity(capacity: usize) -> TreeStore<T> {
         TreeStore {
             data: Vec::with_capacity(capacity),
+            last_added_root_node_index: 0
         }
     }
 
@@ -40,19 +43,30 @@ impl<T> TreeStore<T> {
         node_builder_cb(self.add_tree(initial_val))
     }
 
-    pub fn add_tree<'a>(
-        &'a mut self,
+    pub fn add_tree(
+        &mut self,
         initial_val: T
-    ) -> NodeBuilder<'a,T> {
-        let child_node_index = self.data.len();
+    ) -> NodeBuilder<T> {
+        let new_root_node_index = self.data.len();
         self.data.push(ManuallyDrop::new(NodeData {
             val: initial_val,
             next_sibling_offset: None,
         }));
 
+        // update next_sibling_offset of the last added root node (if any, there won't be any if and only if new_root_node_index == 0)
+        if new_root_node_index > 0 {
+            debug_assert!(self.last_added_root_node_index < new_root_node_index);
+            let offset = new_root_node_index - self.last_added_root_node_index;
+            debug_assert!(offset > 0);
+            unsafe {
+                self.data.get_unchecked_mut(self.last_added_root_node_index).next_sibling_offset = Some(NonZeroUsize::new_unchecked(offset));
+            }
+        }
+        self.last_added_root_node_index = new_root_node_index;
+
         NodeBuilder {
             store: self,
-            index: child_node_index,
+            index: new_root_node_index,
             last_added_child_index: None,
         }
     }
@@ -123,12 +137,10 @@ impl<'a, T> NodeBuilder<'a, T> {
         child_builder_cb(self.add_child(initial_val))
     }
 
-    pub fn add_child<'b>(
-        &'b mut self,
+    pub fn add_child(
+        &mut self,
         initial_val: T
-    ) -> NodeBuilder<'b,T>
-    where
-        'a: 'b
+    ) -> NodeBuilder<T>
     {
         let child_node_index = self.store.data.len();
         self.store.data.push(ManuallyDrop::new(NodeData {
@@ -140,7 +152,7 @@ impl<'a, T> NodeBuilder<'a, T> {
         if let Some(last_added_child_index) = self.last_added_child_index {
             debug_assert!(last_added_child_index < child_node_index);
             let offset = child_node_index - last_added_child_index;
-            debug_assert!(offset != 0);
+            debug_assert!(offset > 0);
             unsafe {
                 self.store.data.get_unchecked_mut(last_added_child_index).next_sibling_offset = Some(NonZeroUsize::new_unchecked(offset));
             }
@@ -166,6 +178,12 @@ impl<'t, T> Clone for NodeIter<'t, T> {
         Self {
             remaining_nodes: self.remaining_nodes
         }
+    }
+}
+
+impl<'t, T> NodeIter<'t, T> {
+    pub fn num_nodes_incl_descendants(&self) -> usize {
+        self.remaining_nodes.len()
     }
 }
 
@@ -208,6 +226,14 @@ impl<'t, T> NodeRef<'t, T> {
         debug_assert!(self.slice.len() > 0);
         unsafe { &self.slice.get_unchecked(0).val }
     }
+
+    pub fn num_descendants_incl_self(&self) -> usize {
+        self.slice.len()
+    }
+
+    pub fn num_descendants_excl_self(&self) -> usize {
+        self.slice.len()-1
+    }
 }
 
 pub struct NodeIterMut<'t, T> {
@@ -242,6 +268,12 @@ impl<'t, T> Iterator for NodeIterMut<'t, T> {
     }
 }
 
+impl<'t, T> NodeIterMut<'t, T> {
+    pub fn num_nodes_incl_descendants(&self) -> usize {
+        self.remaining_nodes.len()
+    }
+}
+
 impl<'t, T> NodeRefMut<'t, T> {
     pub fn children(self) -> NodeIterMut<'t, T> {
         let (_, remaining_nodes) = self.slice.split_first_mut().unwrap();
@@ -256,6 +288,14 @@ impl<'t, T> NodeRefMut<'t, T> {
     pub fn val_mut(&mut self) -> &mut T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &mut self.slice.get_unchecked_mut(0).val }
+    }
+
+    pub fn num_descendants_incl_self(&self) -> usize {
+        self.slice.len()
+    }
+
+    pub fn num_descendants_excl_self(&self) -> usize {
+        self.slice.len()-1
     }
 }
 
@@ -354,5 +394,13 @@ impl<'t, T> NodeDrain<'t, T> {
     pub fn val_mut(&mut self) -> &mut T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &mut self.slice.get_unchecked_mut(0).val }
+    }
+
+    pub fn num_descendants_incl_self(&self) -> usize {
+        self.slice.len()
+    }
+
+    pub fn num_descendants_excl_self(&self) -> usize {
+        self.slice.len()-1
     }
 }
