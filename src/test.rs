@@ -198,8 +198,8 @@ mod tests {
 
     use crate::*;
 
-    fn build_store(test: Arc<CheckedTest>) -> TreeStore<Checked<i32>> {
-        let mut store = TreeStore::new();
+    fn build_store(test: Arc<CheckedTest>) -> IronedForest<Checked<i32>> {
+        let mut store = IronedForest::new();
         store.build_tree(Checked::new(1, test.clone()), |mut node| {
             node.build_child(Checked::new(8, test.clone()), |mut node| {
                 node.add_child(Checked::new(11, test.clone()));
@@ -328,47 +328,47 @@ mod tests {
             let mut store = build_store(test.clone());
 
             let mut iter = store.iter_trees_mut();
-            let node = iter.next().unwrap();
+            let mut node = iter.next().unwrap();
             assert_eq!(*node.val().get(), 2);
             {
                 let mut children = node.children();
-                let node = children.next().unwrap();
+                let mut node = children.next().unwrap();
                 assert_eq!(*node.val().get(), 10);
                 {
                     let mut children = node.children();
                     // 11
-                    let node = children.next().unwrap();
+                    let mut node = children.next().unwrap();
                     assert_eq!(*node.val().get(), 11);
                     assert!(node.children().next().is_none());
                     // 12
-                    let node = children.next().unwrap();
+                    let mut node = children.next().unwrap();
                     assert_eq!(*node.val().get(), 12);
                     assert!(node.children().next().is_none());
                     // 13
-                    let node = children.next().unwrap();
+                    let mut node = children.next().unwrap();
                     assert_eq!(*node.val().get(), 13);
                     assert!(node.children().next().is_none());
                     // end
                     assert!(children.next().is_none());
                 }
-                let node = children.next().unwrap();
+                let mut node = children.next().unwrap();
                 assert_eq!(*node.val().get(), 20);
                 assert!(node.children().next().is_none());
 
-                let node = children.next().unwrap();
+                let mut node = children.next().unwrap();
                 assert_eq!(*node.val().get(), 30);
                 {
                     let mut children = node.children();
                     // 31
-                    let node = children.next().unwrap();
+                    let mut node = children.next().unwrap();
                     assert_eq!(*node.val().get(), 31);
                     assert!(node.children().next().is_none());
                     // 32
-                    let node = children.next().unwrap();
+                    let mut node = children.next().unwrap();
                     assert_eq!(*node.val().get(), 32);
                     assert!(node.children().next().is_none());
                     // 33
-                    let node = children.next().unwrap();
+                    let mut node = children.next().unwrap();
                     assert_eq!(*node.val().get(), 33);
                     assert!(node.children().next().is_none());
                     // end
@@ -376,37 +376,37 @@ mod tests {
                 }
                 assert!(children.next().is_none());
             }
-            let node = iter.next().unwrap();
+            let mut node = iter.next().unwrap();
             assert_eq!(*node.val().get(), 3);
             {
                 let mut children = node.children();
-                let node = children.next().unwrap();
+                let mut node = children.next().unwrap();
                 assert_eq!(*node.val().get(), 10);
                 assert!(node.children().next().is_none());
 
-                let node = children.next().unwrap();
+                let mut node = children.next().unwrap();
                 assert_eq!(*node.val().get(), 20);
                 {
                     let mut children = node.children();
                     // 21
-                    let node = children.next().unwrap();
+                    let mut node = children.next().unwrap();
                     assert_eq!(*node.val().get(), 21);
                     assert!(node.children().next().is_none());
                     // 22
-                    let node = children.next().unwrap();
+                    let mut node = children.next().unwrap();
                     assert_eq!(*node.val().get(), 22);
                     assert!(node.children().next().is_none());
                     // 23
-                    let node = children.next().unwrap();
+                    let mut node = children.next().unwrap();
                     assert_eq!(*node.val().get(), 23);
                     assert!(node.children().next().is_none());
                     // end
                     assert!(children.next().is_none());
                 }
-                let node = children.next().unwrap();
+                let mut node = children.next().unwrap();
                 assert_eq!(*node.val().get(), 30);
                 assert!(node.children().next().is_none());
-                
+
                 assert!(children.next().is_none());
             }
             assert!(iter.next().is_none());
@@ -499,7 +499,7 @@ mod tests {
                 let mut node = children.next().unwrap();
                 assert_eq!(*node.val_mut().get_mut(), 30);
                 assert!(node.children().next().is_none());
-                
+
                 assert!(children.next().is_none());
             }
             assert!(iter.next().is_none());
@@ -594,7 +594,7 @@ mod tests {
                 let (val, mut sub_children) = children.next().unwrap().into_val_and_children();
                 assert_eq!(*val.get(), 30);
                 assert!(sub_children.next().is_none());
-                
+
                 assert!(children.next().is_none());
             }
             assert!(iter.next().is_none());

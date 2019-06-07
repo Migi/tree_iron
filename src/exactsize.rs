@@ -7,22 +7,22 @@ struct ExactSize<T> {
     num_children: usize,
 }
 
-pub struct ExactSizeTreeStore<T> {
-    store: TreeStore<ExactSize<T>>,
+pub struct ExactSizeIronedForest<T> {
+    sub_forest: IronedForest<ExactSize<T>>,
     num_trees: usize,
 }
 
-impl<T> ExactSizeTreeStore<T> {
-    pub fn new() -> ExactSizeTreeStore<T> {
-        ExactSizeTreeStore {
-            store: TreeStore::new(),
+impl<T> ExactSizeIronedForest<T> {
+    pub fn new() -> ExactSizeIronedForest<T> {
+        ExactSizeIronedForest {
+            sub_forest: IronedForest::new(),
             num_trees: 0,
         }
     }
 
-    pub fn with_capacity(capacity: usize) -> ExactSizeTreeStore<T> {
-        ExactSizeTreeStore {
-            store: TreeStore::with_capacity(capacity),
+    pub fn with_capacity(capacity: usize) -> ExactSizeIronedForest<T> {
+        ExactSizeIronedForest {
+            sub_forest: IronedForest::with_capacity(capacity),
             num_trees: 0,
         }
     }
@@ -35,28 +35,21 @@ impl<T> ExactSizeTreeStore<T> {
         node_builder_cb(self.add_tree(initial_val))
     }
 
-    pub fn add_tree(
-        &mut self,
-        initial_val: T,
-    ) -> ExactSizeNodeBuilder<T> {
+    pub fn add_tree(&mut self, initial_val: T) -> ExactSizeNodeBuilder<T> {
         self.num_trees += 1;
 
         let exact_size = ExactSize {
             val: initial_val,
             num_children: 0,
         };
-        ExactSizeNodeBuilder { 
-            node_builder: self.store.add_tree(exact_size)
+        ExactSizeNodeBuilder {
+            node_builder: self.sub_forest.add_tree(exact_size),
         }
-    }
-
-    pub fn num_trees(&self) -> usize {
-        self.num_trees
     }
 
     pub fn iter_trees(&self) -> ExactSizeNodeIter<T> {
         ExactSizeNodeIter {
-            iter: self.store.iter_trees(),
+            iter: self.sub_forest.iter_trees(),
             len: self.num_trees(),
         }
     }
@@ -64,7 +57,7 @@ impl<T> ExactSizeTreeStore<T> {
     pub fn iter_trees_mut(&mut self) -> ExactSizeNodeIterMut<T> {
         let len = self.num_trees();
         ExactSizeNodeIterMut {
-            iter: self.store.iter_trees_mut(),
+            iter: self.sub_forest.iter_trees_mut(),
             len,
         }
     }
@@ -72,9 +65,17 @@ impl<T> ExactSizeTreeStore<T> {
     pub fn drain_trees(self) -> ExactSizeTreeDrain<T> {
         let num_trees = self.num_trees();
         ExactSizeTreeDrain {
-            drain: self.store.drain_trees(),
+            drain: self.sub_forest.drain_trees(),
             num_trees,
         }
+    }
+
+    pub fn num_trees(&self) -> usize {
+        self.num_trees
+    }
+
+    pub fn tot_num_nodes(&self) -> usize {
+        self.sub_forest.tot_num_nodes()
     }
 }
 
@@ -104,10 +105,7 @@ impl<'a, T> ExactSizeNodeBuilder<'a, T> {
         child_builder_cb(self.add_child(initial_val))
     }
 
-    pub fn add_child(
-        &mut self,
-        initial_val: T,
-    ) -> ExactSizeNodeBuilder<T> {
+    pub fn add_child(&mut self, initial_val: T) -> ExactSizeNodeBuilder<T> {
         self.node_builder.val_mut().num_children += 1;
 
         let exact_size = ExactSize {
@@ -115,8 +113,7 @@ impl<'a, T> ExactSizeNodeBuilder<'a, T> {
             num_children: 0,
         };
         ExactSizeNodeBuilder {
-            node_builder: self.node_builder
-                .add_child(exact_size)
+            node_builder: self.node_builder.add_child(exact_size),
         }
     }
 }
@@ -125,11 +122,6 @@ impl<'a, T> ExactSizeNodeBuilder<'a, T> {
 pub struct ExactSizeNodeIter<'t, T> {
     iter: NodeIter<'t, ExactSize<T>>,
     len: usize,
-}
-
-/// test
-pub struct ExactSizeNodeRef<'t, T> {
-    node_ref: NodeRef<'t, ExactSize<T>>,
 }
 
 impl<'t, T> Iterator for ExactSizeNodeIter<'t, T> {
@@ -159,6 +151,11 @@ impl<'t, T> ExactSizeIterator for ExactSizeNodeIter<'t, T> {
     }
 }
 
+/// test
+pub struct ExactSizeNodeRef<'t, T> {
+    node_ref: NodeRef<'t, ExactSize<T>>,
+}
+
 impl<'t, T> ExactSizeNodeRef<'t, T> {
     pub fn children(self) -> ExactSizeNodeIter<'t, T> {
         let len = self.num_children();
@@ -181,11 +178,6 @@ impl<'t, T> ExactSizeNodeRef<'t, T> {
 pub struct ExactSizeNodeIterMut<'t, T> {
     iter: NodeIterMut<'t, ExactSize<T>>,
     len: usize,
-}
-
-/// test
-pub struct ExactSizeNodeRefMut<'t, T> {
-    node_ref: NodeRefMut<'t, ExactSize<T>>,
 }
 
 impl<'t, T> Iterator for ExactSizeNodeIterMut<'t, T> {
@@ -215,8 +207,21 @@ impl<'t, T> ExactSizeIterator for ExactSizeNodeIterMut<'t, T> {
     }
 }
 
+/// test
+pub struct ExactSizeNodeRefMut<'t, T> {
+    node_ref: NodeRefMut<'t, ExactSize<T>>,
+}
+
 impl<'t, T> ExactSizeNodeRefMut<'t, T> {
-    pub fn children(self) -> ExactSizeNodeIterMut<'t, T> {
+    pub fn into_children(self) -> ExactSizeNodeIterMut<'t,T> {
+        let len = self.num_children();
+        ExactSizeNodeIterMut {
+            iter: self.node_ref.into_children(),
+            len,
+        }
+    }
+
+    pub fn children(&mut self) -> ExactSizeNodeIterMut<T> {
         let len = self.num_children();
         ExactSizeNodeIterMut {
             iter: self.node_ref.children(),
@@ -257,11 +262,6 @@ pub struct ExactSizeNodeListDrain<'t, T> {
     len: usize,
 }
 
-/// test
-pub struct ExactSizeNodeDrain<'t, T> {
-    node: NodeDrain<'t, ExactSize<T>>,
-}
-
 impl<'t, T> Iterator for ExactSizeNodeListDrain<'t, T> {
     type Item = ExactSizeNodeDrain<'t, T>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -287,6 +287,11 @@ impl<'t, T> ExactSizeIterator for ExactSizeNodeListDrain<'t, T> {
     fn len(&self) -> usize {
         self.len
     }
+}
+
+/// test
+pub struct ExactSizeNodeDrain<'t, T> {
+    node: NodeDrain<'t, ExactSize<T>>,
 }
 
 impl<'t, T> ExactSizeNodeDrain<'t, T> {
