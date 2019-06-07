@@ -62,11 +62,11 @@ impl<T> ExactSizeIronedForest<T> {
         }
     }
 
-    pub fn drain_trees(self) -> ExactSizeTreeDrain<T> {
+    pub fn drain_trees(&mut self) -> ExactSizeNodeListDrain<'_, T> {
         let num_trees = self.num_trees();
-        ExactSizeTreeDrain {
+        ExactSizeNodeListDrain {
             drain: self.sub_forest.drain_trees(),
-            num_trees,
+            len: num_trees,
         }
     }
 
@@ -213,7 +213,7 @@ pub struct ExactSizeNodeRefMut<'t, T> {
 }
 
 impl<'t, T> ExactSizeNodeRefMut<'t, T> {
-    pub fn into_children(self) -> ExactSizeNodeIterMut<'t,T> {
+    pub fn into_children(self) -> ExactSizeNodeIterMut<'t, T> {
         let len = self.num_children();
         ExactSizeNodeIterMut {
             iter: self.node_ref.into_children(),
@@ -239,20 +239,6 @@ impl<'t, T> ExactSizeNodeRefMut<'t, T> {
 
     pub fn num_children(&self) -> usize {
         self.node_ref.val().num_children
-    }
-}
-
-pub struct ExactSizeTreeDrain<T> {
-    drain: TreeDrain<ExactSize<T>>,
-    num_trees: usize,
-}
-
-impl<T> ExactSizeTreeDrain<T> {
-    pub fn drain_all(&mut self) -> ExactSizeNodeListDrain<T> {
-        ExactSizeNodeListDrain {
-            drain: self.drain.drain_all(),
-            len: self.num_trees,
-        }
     }
 }
 

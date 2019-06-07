@@ -1,23 +1,12 @@
 /// Core contains all the unsafe code.
 /// It should be kept as small as possible.
 use std::iter::Iterator;
-use std::mem::ManuallyDrop;
 use std::num::NonZeroUsize;
 
 /// test
 pub struct IronedForest<T> {
-    data: Vec<ManuallyDrop<NodeData<T>>>, // all data is dropped in drop(), only drain_trees() prevents this by swapping out the vec for an empty one
+    data: Vec<NodeData<T>>,
     last_added_root_node_index: usize, // used to update `next_sibling_offset` of the last root node when adding a tree. Only valid when data.len() > 0
-}
-
-impl<T> Drop for IronedForest<T> {
-    fn drop(&mut self) {
-        for node in self.data.iter_mut() {
-            unsafe {
-                ManuallyDrop::drop(node);
-            }
-        }
-    }
 }
 
 impl<T> IronedForest<T> {
@@ -45,10 +34,10 @@ impl<T> IronedForest<T> {
 
     pub fn add_tree(&mut self, initial_val: T) -> NodeBuilder<T> {
         let new_root_node_index = self.data.len();
-        self.data.push(ManuallyDrop::new(NodeData {
+        self.data.push(NodeData {
             val: initial_val,
             next_sibling_offset: None,
-        }));
+        });
 
         // update next_sibling_offset of the last added root node (if any, there won't be any if and only if new_root_node_index == 0)
         if new_root_node_index > 0 {
@@ -82,13 +71,33 @@ impl<T> IronedForest<T> {
         }
     }
 
-    pub fn drain_trees(mut self) -> TreeDrain<T> {
-        let data = std::mem::replace(&mut self.data, Vec::new());
-        TreeDrain { data, drop_from: 0 }
+    pub fn drain_trees(&mut self) -> NodeListDrain<'_, T> {
+        // first, get the current length of the data vector.
+        let old_len = self.data.len();
+        unsafe {
+            // Now we set the length to 0.
+            // If we would stop here, this would leak all the memory in the vector.
+            self.data.set_len(0);
+
+            // Now we reconstruct a slice to the original contents of the vector.
+            // This slice is pointing entirely to memory that is currently allocated
+            // (i.e. within the capacity of the vector), but won't get dropped.
+            let mut_slice = std::slice::from_raw_parts_mut(self.data.as_mut_ptr(), old_len);
+
+            // Finally we create a NodeListDrain<T> from this slice.
+            // This NodeListDrain will read all the data out of the slice as the user
+            // iterates over it, and when the NodeListDrain gets dropped,
+            // it drops whatever data wasn't iterated over yet.
+            // NOTE: NodeListDrain mutably borrows this IronedForest, so no changes
+            // to the vector can happen while the NodeListDrain exists.
+            NodeListDrain {
+                remaining_nodes: mut_slice,
+            }
+        }
     }
 
     /// Read-only view of the raw data.
-    pub fn raw_data(&self) -> &Vec<ManuallyDrop<NodeData<T>>> {
+    pub fn raw_data(&self) -> &Vec<NodeData<T>> {
         &self.data
     }
 
@@ -138,10 +147,10 @@ impl<'a, T> NodeBuilder<'a, T> {
 
     pub fn add_child(&mut self, initial_val: T) -> NodeBuilder<T> {
         let child_node_index = self.store.data.len();
-        self.store.data.push(ManuallyDrop::new(NodeData {
+        self.store.data.push(NodeData {
             val: initial_val,
             next_sibling_offset: None,
-        }));
+        });
 
         // update next_sibling_offset of the last added node (if any)
         if let Some(last_added_child_index) = self.last_added_child_index {
@@ -168,7 +177,7 @@ impl<'a, T> NodeBuilder<'a, T> {
 /// test
 #[derive(Copy)]
 pub struct NodeIter<'t, T> {
-    remaining_nodes: &'t [ManuallyDrop<NodeData<T>>], // contains (only) the nodes in the iterator and all their descendants
+    remaining_nodes: &'t [NodeData<T>], // contains (only) the nodes in the iterator and all their descendants
 }
 
 impl<'t, T> Clone for NodeIter<'t, T> {
@@ -210,7 +219,7 @@ impl<'t, T> Iterator for NodeIter<'t, T> {
 /// test
 #[derive(Clone, Copy)]
 pub struct NodeRef<'t, T> {
-    slice: &'t [ManuallyDrop<NodeData<T>>], // contains (only) the current node and all its descendants
+    slice: &'t [NodeData<T>], // contains (only) the current node and all its descendants
 }
 
 impl<'t, T> NodeRef<'t, T> {
@@ -234,7 +243,7 @@ impl<'t, T> NodeRef<'t, T> {
 }
 
 pub struct NodeIterMut<'t, T> {
-    remaining_nodes: &'t mut [ManuallyDrop<NodeData<T>>], // contains (only) the nodes in the iterator and all their descendants
+    remaining_nodes: &'t mut [NodeData<T>], // contains (only) the nodes in the iterator and all their descendants
 }
 
 impl<'t, T> Iterator for NodeIterMut<'t, T> {
@@ -269,11 +278,11 @@ impl<'t, T> NodeIterMut<'t, T> {
 }
 
 pub struct NodeRefMut<'t, T> {
-    slice: &'t mut [ManuallyDrop<NodeData<T>>], // contains (only) the current node and all its descendants
+    slice: &'t mut [NodeData<T>], // contains (only) the current node and all its descendants
 }
 
 impl<'t, T> NodeRefMut<'t, T> {
-    pub fn into_children(self) -> NodeIterMut<'t,T> {
+    pub fn into_children(self) -> NodeIterMut<'t, T> {
         let (_, remaining_nodes) = self.slice.split_first_mut().unwrap();
         NodeIterMut { remaining_nodes }
     }
@@ -302,55 +311,20 @@ impl<'t, T> NodeRefMut<'t, T> {
     }
 }
 
-pub struct TreeDrain<T> {
-    data: Vec<ManuallyDrop<NodeData<T>>>, // only data from `drop_from` to the end of the vec is dropped
-    drop_from: usize,
-}
-
-impl<T> Drop for TreeDrain<T> {
-    fn drop(&mut self) {
-        for node in self.data[self.drop_from..].iter_mut() {
-            unsafe {
-                ManuallyDrop::drop(node);
-            }
-        }
-    }
-}
-
-/*impl<T> Iterator for TreeDrain<T> {
-    type Item = NodeRefMut<'t, T>;
-    fn next(&mut self) -> Option<Self::Item> {
-
-    }
-}*/
-
-impl<T> TreeDrain<T> {
-    pub fn drain_next(&mut self) -> NodeListDrain<T> {
-        let drop_from = self.drop_from;
-        self.drop_from = self.data.len();
-        NodeListDrain {
-            remaining_nodes: &mut self.data[drop_from..],
-        }
-    }
-
-    pub fn drain_all(&mut self) -> NodeListDrain<T> {
-        let drop_from = self.drop_from;
-        self.drop_from = self.data.len();
-        NodeListDrain {
-            remaining_nodes: &mut self.data[drop_from..],
-        }
-    }
-}
-
 pub struct NodeListDrain<'t, T> {
-    remaining_nodes: &'t mut [ManuallyDrop<NodeData<T>>], // contains (only) the nodes in the iterator and all their descendants. Drops them in drop().
+    // `remaining_nodes` is a slice containing (only) the remaining nodes in the iterator and all their descendants.
+    // Normally slices don't own data, but not in this case.
+    // NodeListDrain owns the data in this slice, it drops them in drop(), and it can move out values using ptr::read in next()
+    remaining_nodes: &'t mut [NodeData<T>],
 }
 
 impl<'t, T> Drop for NodeListDrain<'t, T> {
     fn drop(&mut self) {
+        // read out all values in the slice and drop them
         for node in self.remaining_nodes.iter_mut() {
             unsafe {
-                ManuallyDrop::drop(node);
+                let value: NodeData<T> = std::ptr::read(node);
+                std::mem::drop(value); // not strictly needed
             }
         }
     }
@@ -363,16 +337,21 @@ impl<'t, T> Iterator for NodeListDrain<'t, T> {
             .get(0)
             .map(|cur_node| cur_node.next_sibling_offset)
             .map(|maybe_next_sibling_offset| {
+                // move the slice out of self, so it won't drop the data anymore
+                let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
+
                 if let Some(next_sibling_offset) = maybe_next_sibling_offset {
-                    let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
+                    // split off the first node and its descendants
                     let (cur_node_slice, next_nodes_slice) =
                         remaining_nodes.split_at_mut(next_sibling_offset.get());
+
+                    // update self.remaining_nodes so we drop them again and for future calls to next()
                     self.remaining_nodes = next_nodes_slice;
+
                     NodeDrain {
                         slice: cur_node_slice,
                     }
                 } else {
-                    let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
                     NodeDrain {
                         slice: remaining_nodes,
                     }
@@ -388,14 +367,19 @@ impl<'t, T> NodeListDrain<'t, T> {
 }
 
 pub struct NodeDrain<'t, T> {
-    slice: &'t mut [ManuallyDrop<NodeData<T>>], // contains (only) the current node and all its descendants. Drops them in drop().
+    // `remaining_nodes` is a slice containing (only) the current node (i.e., the first node in the slice) and all its descendants.
+    // Normally slices don't own data, but not in this case.
+    // NodeDrain owns the data in this slice, can read out values using ptr::read, and it drops the values in drop()
+    slice: &'t mut [NodeData<T>],
 }
 
 impl<'t, T> Drop for NodeDrain<'t, T> {
     fn drop(&mut self) {
+        // read out all values in the slice and drop them
         for node in self.slice.iter_mut() {
             unsafe {
-                ManuallyDrop::drop(node);
+                let value: NodeData<T> = std::ptr::read(node);
+                std::mem::drop(value); // not strictly needed
             }
         }
     }
@@ -403,10 +387,18 @@ impl<'t, T> Drop for NodeDrain<'t, T> {
 
 impl<'t, T> NodeDrain<'t, T> {
     pub fn into_val_and_children(mut self) -> (T, NodeListDrain<'t, T>) {
+        // move the slice out of self, so it won't drop the data anymore
         let slice = std::mem::replace(&mut self.slice, &mut []);
+
+        // split off the first element
         let (node_data_ref, remaining_nodes) = slice.split_first_mut().unwrap();
+
         unsafe {
-            let node_data: NodeData<T> = std::ptr::read(&**node_data_ref); // TODO: replace with ManuallyDrop::take() once that is stabilized
+            // read the NodeData out of the ref we have to it
+            let node_data: NodeData<T> = std::ptr::read(node_data_ref);
+
+            // Return the value (the user will drop it)
+            // and the remaining slice as a NodeListDrain, who now owns the values in that slice (and will drop them)
             (node_data.val, NodeListDrain { remaining_nodes })
         }
     }

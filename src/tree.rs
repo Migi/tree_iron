@@ -1,26 +1,24 @@
 use crate::*;
 
-use std::mem::ManuallyDrop;
-
 /// test
 pub struct IronedTree<T> {
-    forest:  IronedForest<T>,
-    root_val: T
+    forest: IronedForest<T>,
+    root_val: T,
 }
 
 impl<T> IronedTree<T> {
     pub fn new(root_val: T) -> IronedTree<T> {
         IronedTree {
-			forest: IronedForest::new(),
-			root_val
-		}
+            forest: IronedForest::new(),
+            root_val,
+        }
     }
 
-    pub fn with_capacity(root_val: T) -> IronedTree<T> {
+    pub fn with_capacity(root_val: T, capacity: usize) -> IronedTree<T> {
         IronedTree {
-			forest: IronedForest::with_capacity(),
-			root_val
-		}
+            forest: IronedForest::with_capacity(capacity),
+            root_val,
+        }
     }
 
     pub fn build_child_of_root<R>(
@@ -28,7 +26,7 @@ impl<T> IronedTree<T> {
         initial_val: T,
         node_builder_cb: impl FnOnce(NodeBuilder<T>) -> R,
     ) -> R {
-        node_builder_cb(self.add_child(initial_val))
+        node_builder_cb(self.add_child_of_root(initial_val))
     }
 
     pub fn add_child_of_root(&mut self, initial_val: T) -> NodeBuilder<T> {
@@ -43,15 +41,14 @@ impl<T> IronedTree<T> {
         self.forest.iter_trees_mut()
     }
 
-    pub fn drain(self) -> RootNodeDrain<T> {
-        RootNodeDrain {
-			val: self.root_val,
-			children: self.forest.drain_trees()
-		}
+    pub fn drain_root_node_and_children(self) -> (T,TreeDrain<T>) {
+		(self.val, TreeDrain {
+			forest: self.forest
+		})
     }
 
     /// Read-only view of the raw data.
-    pub fn raw_data(&self) -> &Vec<ManuallyDrop<NodeData<T>>> {
+    pub fn raw_data(&self) -> &Vec<NodeData<T>> {
         self.forest.raw_data()
     }
 
@@ -60,29 +57,12 @@ impl<T> IronedTree<T> {
     }
 }
 
-pub struct RootNodeDrain<T> {
-	val: T,
-    children: TreeDrain<T>,
+pub struct TreeDrain<T> {
+    forest: IronedForest<T>,
 }
 
-impl<'t, T> RootNodeDrain<'t, T> {
-    pub fn into_val_and_children(mut self) -> (T, NodeListDrain<'t, T>) {
-        (self.val, self.children)
-    }
-
-    pub fn val(&self) -> &T {
-        &self.val
-    }
-
-    pub fn val_mut(&mut self) -> &mut T {
-        &mut self.val
-    }
-
-    pub fn num_descendants_incl_self(&self) -> usize {
-        self.children().remaining_subtrees_size() + 1
-    }
-
-    pub fn num_descendants_excl_self(&self) -> usize {
-        self.children().remaining_subtrees_size()
+impl<T> TreeDrain<T> {
+    pub fn drain_children(&mut self) -> NodeListDrain<'_, T> {
+        self.forest.drain_trees()
     }
 }
