@@ -41,8 +41,8 @@ impl<T> IronedTree<T> {
         self.forest.iter_trees_mut()
     }
 
-    pub fn drain_root_node_and_children(self) -> (T,TreeDrain<T>) {
-		(self.val, TreeDrain {
+    pub fn drain_root(self) -> (T,RootDrain<T>) {
+		(self.root_val, RootDrain {
 			forest: self.forest
 		})
     }
@@ -57,12 +57,12 @@ impl<T> IronedTree<T> {
     }
 }
 
-pub struct TreeDrain<T> {
+pub struct RootDrain<T> {
     forest: IronedForest<T>,
 }
 
-impl<T> TreeDrain<T> {
-    pub fn drain_children(&mut self) -> NodeListDrain<'_, T> {
+impl<T> RootDrain<T> {
+    pub fn children(&mut self) -> NodeListDrain<'_, T> {
         self.forest.drain_trees()
     }
 }

@@ -2,7 +2,9 @@ use crate::*;
 
 use std::iter::{ExactSizeIterator, Iterator};
 
-struct ExactSize<T> {
+// pub because it appears in the return type of iter_flattened (etc). But it's not used anywhere other than that.
+#[doc(hidden)]
+pub struct ExactSize<T> {
     val: T,
     num_children: usize,
 }
@@ -76,6 +78,18 @@ impl<T> ExactSizeIronedForest<T> {
 
     pub fn tot_num_nodes(&self) -> usize {
         self.sub_forest.tot_num_nodes()
+    }
+
+    pub fn iter_flattened<'a>(&'a self) -> std::iter::Map<std::iter::Map<std::slice::Iter<'a, NodeData<ExactSize<T>>>, impl FnMut(&'a NodeData<ExactSize<T>>) -> &'a ExactSize<T>>, impl FnMut(&'a ExactSize<T>) -> &'a T> {
+        self.sub_forest.iter_flattened().map(|exact_size| &exact_size.val)
+    }
+
+    pub fn iter_flattened_mut<'a>(&'a mut self) -> std::iter::Map<std::iter::Map<std::slice::IterMut<'a, NodeData<ExactSize<T>>>, impl FnMut(&'a mut NodeData<ExactSize<T>>) -> &'a mut ExactSize<T>>, impl FnMut(&'a mut ExactSize<T>) -> &'a mut T> {
+        self.sub_forest.iter_flattened_mut().map(|exact_size| &mut exact_size.val)
+    }
+
+    pub fn drain_flattened(&mut self) -> std::iter::Map<std::iter::Map<std::vec::Drain<NodeData<ExactSize<T>>>, impl FnMut(NodeData<ExactSize<T>>) -> ExactSize<T>>, impl FnMut(ExactSize<T>) -> T> {
+        self.sub_forest.drain_flattened().map(|exact_size| exact_size.val)
     }
 }
 

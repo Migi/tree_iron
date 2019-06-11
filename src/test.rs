@@ -198,15 +198,39 @@ mod tests {
 
     use crate::*;
 
+    /**
+     * Builds two trees (in an intentially convoluted way) that look like this 
+     *  - 2
+     *      - 10
+     *          - 11
+     *          - 12
+     *          - 13
+     *      - 20
+     *      - 30
+     *          - 31
+     *          - 32
+     *          - 33
+     *  - 3
+     *      - 10
+     *      - 20
+     *          - 21
+     *          - 22
+     *          - 23
+     *      - 30
+     * 
+     * The sum of the values of all the nodes in this forest is 323.
+     */
     fn build_store(test: Arc<CheckedTest>) -> IronedForest<Checked<i32>> {
         let mut store = IronedForest::new();
         store.build_tree(Checked::new(1, test.clone()), |mut node| {
             node.build_child(Checked::new(8, test.clone()), |mut node| {
                 node.add_child(Checked::new(11, test.clone()));
                 node.add_child(Checked::new(12, test.clone()));
-                *node.val_mut() = Checked::new(9, test.clone());
+                assert_eq!(node.val().val, 8); // `node` is the node we're currently adding children to (inital value was 8)
+                *node.val_mut() = Checked::new(9, test.clone()); // set its value to 9
                 node.add_child(Checked::new(13, test.clone()));
-                *node.val_mut() = Checked::new(10, test.clone());
+                assert_eq!(node.val().val, 9); // `node` is the node we're currently adding children to (inital value was 8, current value 9)
+                *node.val_mut() = Checked::new(10, test.clone()); // set its value to 10
             });
             node.add_child(Checked::new(20, test.clone()));
             node.build_child(Checked::new(30, test.clone()), |mut node| {
@@ -214,7 +238,8 @@ mod tests {
                 node.add_child(Checked::new(32, test.clone()));
                 node.add_child(Checked::new(33, test.clone()));
             });
-            *node.val_mut() = Checked::new(2, test.clone());
+            assert_eq!(node.val().val, 1); // `node` is the root node (initial value 1)
+            *node.val_mut() = Checked::new(2, test.clone()); // set its value to 2
         });
         store.build_tree(Checked::new(3, test.clone()), |mut node| {
             node.add_child(Checked::new(10, test.clone()));
@@ -226,6 +251,38 @@ mod tests {
             node.add_child(Checked::new(30, test.clone()));
         });
         store
+    }
+
+    fn count_flattened(forest: &IronedForest<Checked<i32>>) -> i32 {
+        forest.iter_flattened().map(|v| v.val).sum() 
+    }
+
+    fn count(forest: &IronedForest<Checked<i32>>) -> i32 {
+        forest.iter_trees().map(|tree| count_rec(tree)).sum()
+    }
+
+    fn count_rec(node: NodeRef<Checked<i32>>) -> i32 {
+        node.val().val + node.children().map(|node| {
+            count_rec(node)
+        }).sum::<i32>()
+    }
+
+    #[test]
+    fn test_sum_flattened() {
+        let test = Arc::new(CheckedTest::new());
+        {
+            let store = build_store(test.clone());
+            assert_eq!(count_flattened(&store), 323);
+        }
+    }
+
+    #[test]
+    fn test_sum_rec() {
+        let test = Arc::new(CheckedTest::new());
+        {
+            let store = build_store(test.clone());
+            assert_eq!(count(&store), 323);
+        }
     }
 
     #[test]
@@ -511,10 +568,9 @@ mod tests {
     fn test_drain() {
         let test = Arc::new(CheckedTest::new());
         {
-            let store = build_store(test.clone());
+            let mut store = build_store(test.clone());
 
-            let mut drain = store.drain_trees();
-            let mut iter = drain.drain_all();
+            let mut iter = store.drain_trees();
             let (val, sub_children) = iter.next().unwrap().into_val_and_children();
             assert_eq!(*val.get(), 2);
             {
@@ -606,7 +662,7 @@ mod tests {
     fn test_drain_create_only() {
         let test = Arc::new(CheckedTest::new());
         {
-            let store = build_store(test.clone());
+            let mut store = build_store(test.clone());
             let _drain = store.drain_trees();
         }
         assert_eq!(test.num_undropped(), 0);
@@ -616,10 +672,9 @@ mod tests {
     fn test_drain_halfway() {
         let test = Arc::new(CheckedTest::new());
         {
-            let store = build_store(test.clone());
+            let mut store = build_store(test.clone());
 
-            let mut drain = store.drain_trees();
-            let mut iter = drain.drain_all();
+            let mut iter = store.drain_trees();
             let (val, sub_children) = iter.next().unwrap().into_val_and_children();
             assert_eq!(*val.get(), 2);
             {
@@ -646,10 +701,9 @@ mod tests {
     fn test_drain_only_last_half() {
         let test = Arc::new(CheckedTest::new());
         {
-            let store = build_store(test.clone());
+            let mut store = build_store(test.clone());
 
-            let mut drain = store.drain_trees();
-            let mut iter = drain.drain_all();
+            let mut iter = store.drain_trees();
             let (val, sub_children) = iter.next().unwrap().into_val_and_children();
             assert_eq!(*val.get(), 2);
             {

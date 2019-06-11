@@ -96,6 +96,18 @@ impl<T> IronedForest<T> {
         }
     }
 
+    pub fn iter_flattened<'a>(&'a self) -> std::iter::Map<std::slice::Iter<'a, NodeData<T>>, impl FnMut(&'a NodeData<T>) -> &'a T> {
+        self.data.iter().map(|node_data| &node_data.val)
+    }
+
+    pub fn iter_flattened_mut<'a>(&'a mut self) -> std::iter::Map<std::slice::IterMut<'a, NodeData<T>>, impl FnMut(&'a mut NodeData<T>) -> &'a mut T> {
+        self.data.iter_mut().map(|node_data| &mut node_data.val)
+    }
+
+    pub fn drain_flattened(&mut self) -> std::iter::Map<std::vec::Drain<NodeData<T>>, impl FnMut(NodeData<T>) -> T> {
+        self.data.drain(..).map(|node_data| node_data.val)
+    }
+
     /// Read-only view of the raw data.
     pub fn raw_data(&self) -> &Vec<NodeData<T>> {
         &self.data
@@ -314,7 +326,9 @@ impl<'t, T> NodeRefMut<'t, T> {
 pub struct NodeListDrain<'t, T> {
     // `remaining_nodes` is a slice containing (only) the remaining nodes in the iterator and all their descendants.
     // Normally slices don't own data, but not in this case.
-    // NodeListDrain owns the data in this slice, it drops them in drop(), and it can move out values using ptr::read in next()
+    // The data is actually owned by the Vec that this NodeListDrain borrows, but it's out of the bounds of that Vec (but still inside its capacity).
+    // Therefore the NodeListDrain can pretend like it owns the data in this slice, it can drop them in drop(),
+    // and it can move out values using ptr::read (as long as it makes sure to update the slice to prevent a double drop)
     remaining_nodes: &'t mut [NodeData<T>],
 }
 
@@ -369,7 +383,9 @@ impl<'t, T> NodeListDrain<'t, T> {
 pub struct NodeDrain<'t, T> {
     // `remaining_nodes` is a slice containing (only) the current node (i.e., the first node in the slice) and all its descendants.
     // Normally slices don't own data, but not in this case.
-    // NodeDrain owns the data in this slice, can read out values using ptr::read, and it drops the values in drop()
+    // The data is actually owned by the Vec that this NodeDrain borrows, but it's out of the bounds of that Vec (but still inside its capacity).
+    // Therefore the NodeDrain can pretend like it owns the data in this slice, it can drop them in drop(),
+    // and it can move out values using ptr::read (as long as it makes sure to update the slice to prevent a double drop)
     slice: &'t mut [NodeData<T>],
 }
 
