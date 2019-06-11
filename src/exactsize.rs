@@ -1,12 +1,21 @@
 use crate::*;
 
+use std::convert::TryFrom;
 use std::iter::{ExactSizeIterator, Iterator};
 
-// pub because it appears in the return type of iter_flattened (etc). But it's not used anywhere other than that.
-#[doc(hidden)]
 pub struct ExactSize<T> {
     val: T,
     num_children: usize,
+}
+
+impl<T> ExactSize<T> {
+    pub fn val(&self) -> &T {
+        &self.val
+    }
+
+    pub fn num_children(&self) -> usize {
+        self.num_children
+    }
 }
 
 pub struct ExactSizeIronedForest<T> {
@@ -72,24 +81,59 @@ impl<T> ExactSizeIronedForest<T> {
         }
     }
 
+    pub fn iter_flattened<'a>(
+        &'a self,
+    ) -> std::iter::Map<
+        std::iter::Map<
+            std::slice::Iter<'a, NodeData<ExactSize<T>>>,
+            impl FnMut(&'a NodeData<ExactSize<T>>) -> &'a ExactSize<T>,
+        >,
+        impl FnMut(&'a ExactSize<T>) -> &'a T,
+    > {
+        self.sub_forest
+            .iter_flattened()
+            .map(|exact_size| &exact_size.val)
+    }
+
+    pub fn iter_flattened_mut<'a>(
+        &'a mut self,
+    ) -> std::iter::Map<
+        std::iter::Map<
+            std::slice::IterMut<'a, NodeData<ExactSize<T>>>,
+            impl FnMut(&'a mut NodeData<ExactSize<T>>) -> &'a mut ExactSize<T>,
+        >,
+        impl FnMut(&'a mut ExactSize<T>) -> &'a mut T,
+    > {
+        self.sub_forest
+            .iter_flattened_mut()
+            .map(|exact_size| &mut exact_size.val)
+    }
+
+    pub fn drain_flattened(
+        &mut self,
+    ) -> std::iter::Map<
+        std::iter::Map<
+            std::vec::Drain<NodeData<ExactSize<T>>>,
+            impl FnMut(NodeData<ExactSize<T>>) -> ExactSize<T>,
+        >,
+        impl FnMut(ExactSize<T>) -> T,
+    > {
+        self.sub_forest
+            .drain_flattened()
+            .map(|exact_size| exact_size.val)
+    }
+
+    /// Read-only view of the raw data.
+    pub fn raw_data(&self) -> &Vec<NodeData<ExactSize<T>>> {
+        self.sub_forest.raw_data()
+    }
+
     pub fn num_trees(&self) -> usize {
         self.num_trees
     }
 
     pub fn tot_num_nodes(&self) -> usize {
         self.sub_forest.tot_num_nodes()
-    }
-
-    pub fn iter_flattened<'a>(&'a self) -> std::iter::Map<std::iter::Map<std::slice::Iter<'a, NodeData<ExactSize<T>>>, impl FnMut(&'a NodeData<ExactSize<T>>) -> &'a ExactSize<T>>, impl FnMut(&'a ExactSize<T>) -> &'a T> {
-        self.sub_forest.iter_flattened().map(|exact_size| &exact_size.val)
-    }
-
-    pub fn iter_flattened_mut<'a>(&'a mut self) -> std::iter::Map<std::iter::Map<std::slice::IterMut<'a, NodeData<ExactSize<T>>>, impl FnMut(&'a mut NodeData<ExactSize<T>>) -> &'a mut ExactSize<T>>, impl FnMut(&'a mut ExactSize<T>) -> &'a mut T> {
-        self.sub_forest.iter_flattened_mut().map(|exact_size| &mut exact_size.val)
-    }
-
-    pub fn drain_flattened(&mut self) -> std::iter::Map<std::iter::Map<std::vec::Drain<NodeData<ExactSize<T>>>, impl FnMut(NodeData<ExactSize<T>>) -> ExactSize<T>>, impl FnMut(ExactSize<T>) -> T> {
-        self.sub_forest.drain_flattened().map(|exact_size| exact_size.val)
     }
 }
 
@@ -164,6 +208,8 @@ impl<'t, T> ExactSizeIterator for ExactSizeNodeIter<'t, T> {
         self.len
     }
 }
+
+// TODO: implement TrustedLen for ExactSizeNodeIter when that is stable.
 
 /// test
 pub struct ExactSizeNodeRef<'t, T> {
@@ -313,5 +359,113 @@ impl<'t, T> ExactSizeNodeDrain<'t, T> {
 
     pub fn num_children(&self) -> usize {
         self.node.val().num_children
+    }
+}
+
+pub struct ExactSizeIronedTree<T> {
+    forest: ExactSizeIronedForest<T>,
+}
+
+impl<T> ExactSizeIronedTree<T> {
+    pub fn new(
+        root_val: T,
+        node_builder_cb: impl FnOnce(ExactSizeNodeBuilder<T>),
+    ) -> ExactSizeIronedTree<T> {
+        ExactSizeIronedTree::new_with_return_val(root_val, node_builder_cb).0
+    }
+
+    pub fn new_with_return_val<R>(
+        root_val: T,
+        node_builder_cb: impl FnOnce(ExactSizeNodeBuilder<T>) -> R,
+    ) -> (ExactSizeIronedTree<T>, R) {
+        let mut forest = ExactSizeIronedForest::new();
+        let ret = forest.build_tree(root_val, node_builder_cb);
+        (ExactSizeIronedTree { forest }, ret)
+    }
+
+    pub fn new_with_capacity(
+        root_val: T,
+        node_builder_cb: impl FnOnce(ExactSizeNodeBuilder<T>),
+        capacity: usize,
+    ) -> ExactSizeIronedTree<T> {
+        ExactSizeIronedTree::new_with_capacity_and_return_val(root_val, node_builder_cb, capacity).0
+    }
+
+    pub fn new_with_capacity_and_return_val<R>(
+        root_val: T,
+        node_builder_cb: impl FnOnce(ExactSizeNodeBuilder<T>) -> R,
+        capacity: usize,
+    ) -> (ExactSizeIronedTree<T>, R) {
+        let mut forest = ExactSizeIronedForest::with_capacity(capacity);
+        let ret = forest.build_tree(root_val, node_builder_cb);
+        (ExactSizeIronedTree { forest }, ret)
+    }
+
+    pub fn root(&self) -> ExactSizeNodeRef<T> {
+        self.forest.iter_trees().next().unwrap()
+    }
+
+    pub fn root_mut(&mut self) -> ExactSizeNodeRefMut<T> {
+        self.forest.iter_trees_mut().next().unwrap()
+    }
+
+    pub fn drain_root(&mut self) -> ExactSizeNodeDrain<T> {
+        self.forest.drain_trees().next().unwrap()
+    }
+
+    pub fn iter_flattened<'a>(
+        &'a self,
+    ) -> std::iter::Map<
+        std::iter::Map<
+            std::slice::Iter<'a, NodeData<ExactSize<T>>>,
+            impl FnMut(&'a NodeData<ExactSize<T>>) -> &'a ExactSize<T>,
+        >,
+        impl FnMut(&'a ExactSize<T>) -> &'a T,
+    > {
+        self.forest.iter_flattened()
+    }
+
+    pub fn iter_flattened_mut<'a>(
+        &'a mut self,
+    ) -> std::iter::Map<
+        std::iter::Map<
+            std::slice::IterMut<'a, NodeData<ExactSize<T>>>,
+            impl FnMut(&'a mut NodeData<ExactSize<T>>) -> &'a mut ExactSize<T>,
+        >,
+        impl FnMut(&'a mut ExactSize<T>) -> &'a mut T,
+    > {
+        self.forest.iter_flattened_mut()
+    }
+
+    pub fn drain_flattened(
+        &mut self,
+    ) -> std::iter::Map<
+        std::iter::Map<
+            std::vec::Drain<NodeData<ExactSize<T>>>,
+            impl FnMut(NodeData<ExactSize<T>>) -> ExactSize<T>,
+        >,
+        impl FnMut(ExactSize<T>) -> T,
+    > {
+        self.forest.drain_flattened()
+    }
+
+    /// Read-only view of the raw data.
+    pub fn raw_data(&self) -> &Vec<NodeData<ExactSize<T>>> {
+        self.forest.raw_data()
+    }
+
+    pub fn tot_num_nodes(&self) -> usize {
+        self.forest.tot_num_nodes()
+    }
+}
+
+impl<T> TryFrom<ExactSizeIronedForest<T>> for ExactSizeIronedTree<T> {
+    type Error = ();
+    fn try_from(forest: ExactSizeIronedForest<T>) -> Result<Self, Self::Error> {
+        if forest.num_trees == 1 {
+            Ok(ExactSizeIronedTree { forest })
+        } else {
+            Err(())
+        }
     }
 }

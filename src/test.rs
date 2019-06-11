@@ -199,7 +199,7 @@ mod tests {
     use crate::*;
 
     /**
-     * Builds two trees (in an intentially convoluted way) that look like this 
+     * Builds two trees (in an intentially convoluted way) that look like this
      *  - 2
      *      - 10
      *          - 11
@@ -217,7 +217,7 @@ mod tests {
      *          - 22
      *          - 23
      *      - 30
-     * 
+     *
      * The sum of the values of all the nodes in this forest is 323.
      */
     fn build_store(test: Arc<CheckedTest>) -> IronedForest<Checked<i32>> {
@@ -254,7 +254,7 @@ mod tests {
     }
 
     fn count_flattened(forest: &IronedForest<Checked<i32>>) -> i32 {
-        forest.iter_flattened().map(|v| v.val).sum() 
+        forest.iter_flattened().map(|v| v.val).sum()
     }
 
     fn count(forest: &IronedForest<Checked<i32>>) -> i32 {
@@ -262,9 +262,7 @@ mod tests {
     }
 
     fn count_rec(node: NodeRef<Checked<i32>>) -> i32 {
-        node.val().val + node.children().map(|node| {
-            count_rec(node)
-        }).sum::<i32>()
+        node.val().val + node.children().map(|node| count_rec(node)).sum::<i32>()
     }
 
     #[test]
