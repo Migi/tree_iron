@@ -123,6 +123,10 @@ impl<T> ExactSizeIronedForest<T> {
             .map(|exact_size| exact_size.val)
     }
 
+    pub fn raw(&self) -> &IronedForest<ExactSize<T>> {
+        &self.sub_forest
+    }
+
     /// Read-only view of the raw data.
     pub fn raw_data(&self) -> &Vec<NodeData<ExactSize<T>>> {
         self.sub_forest.raw_data()
