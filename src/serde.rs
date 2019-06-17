@@ -125,7 +125,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                         .next_element()?
                         .ok_or_else(|| de::Error::invalid_length(0, &self))?;
 
-                    let mut child_node_builder = self.node_builder.add_child(val);
+                    let mut child_node_builder = self.node_builder.get_child_builder(val);
                     seq.next_element_seed(ChildrenDeserializer {
                         node_builder: &mut child_node_builder,
                     })?
@@ -211,7 +211,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                         .next_element()?
                         .ok_or_else(|| de::Error::invalid_length(0, &self))?;
 
-                    let mut child_node_builder = self.tree_store_mut_ref.add_tree(val);
+                    let mut child_node_builder = self.tree_store_mut_ref.get_tree_builder(val);
                     seq.next_element_seed(ChildrenDeserializer {
                         node_builder: &mut child_node_builder,
                     })?
@@ -328,7 +328,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                                                 node.offset - 1
                                             }
                                         };
-                                        let node_builder_rec = node_builder.add_child(node.val);
+                                        let node_builder_rec = node_builder.get_child_builder(node.val);
                                         rec_add_n_children(seq, Some(n_rec), node_builder_rec)?;
                                         num_read += n_rec;
                                     } else {
@@ -348,7 +348,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                                             Some(node.offset - 1)
                                         }
                                     };
-                                    let node_builder_rec = node_builder.add_child(node.val);
+                                    let node_builder_rec = node_builder.get_child_builder(node.val);
                                     rec_add_n_children(seq, n_rec, node_builder_rec)?;
                                 }
                             }
@@ -358,7 +358,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
 
                     while let Some(node) = seq.next_element::<FlatNode<T>>()? {
                         let offset = node.offset;
-                        let tree_builder = self.tree_store_mut_ref.add_tree(node.val);
+                        let tree_builder = self.tree_store_mut_ref.get_tree_builder(node.val);
                         if offset == 0 {
                             rec_add_n_children(&mut seq, None, tree_builder)?;
                         } else {

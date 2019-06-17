@@ -40,21 +40,25 @@ impl<T> ExactSizeIronedForest<T> {
 
     pub fn build_tree<R>(
         &mut self,
-        initial_val: T,
+        initial_root_val: T,
         node_builder_cb: impl FnOnce(ExactSizeNodeBuilder<T>) -> R,
     ) -> R {
-        node_builder_cb(self.add_tree(initial_val))
+        node_builder_cb(self.get_tree_builder(initial_root_val))
+    }
+    
+    pub fn add_single_node_tree(&mut self, val: T) {
+        self.get_tree_builder(val);
     }
 
-    pub fn add_tree(&mut self, initial_val: T) -> ExactSizeNodeBuilder<T> {
+    pub fn get_tree_builder(&mut self, initial_root_val: T) -> ExactSizeNodeBuilder<T> {
         self.num_trees += 1;
 
         let exact_size = ExactSize {
-            val: initial_val,
+            val: initial_root_val,
             num_children: 0,
         };
         ExactSizeNodeBuilder {
-            node_builder: self.sub_forest.add_tree(exact_size),
+            node_builder: self.sub_forest.get_tree_builder(exact_size),
         }
     }
 
@@ -164,10 +168,14 @@ impl<'a, T> ExactSizeNodeBuilder<'a, T> {
         initial_val: T,
         child_builder_cb: impl FnOnce(ExactSizeNodeBuilder<T>) -> R,
     ) -> R {
-        child_builder_cb(self.add_child(initial_val))
+        child_builder_cb(self.get_child_builder(initial_val))
     }
 
-    pub fn add_child(&mut self, initial_val: T) -> ExactSizeNodeBuilder<T> {
+    pub fn add_child(&mut self, val: T) {
+        self.get_child_builder(val);
+    }
+
+    pub fn get_child_builder(&mut self, initial_val: T) -> ExactSizeNodeBuilder<T> {
         self.node_builder.val_mut().num_children += 1;
 
         let exact_size = ExactSize {
@@ -175,7 +183,7 @@ impl<'a, T> ExactSizeNodeBuilder<'a, T> {
             num_children: 0,
         };
         ExactSizeNodeBuilder {
-            node_builder: self.node_builder.add_child(exact_size),
+            node_builder: self.node_builder.get_child_builder(exact_size),
         }
     }
 }
