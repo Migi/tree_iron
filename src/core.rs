@@ -1,3 +1,5 @@
+// TODO: NodeRefMut to NodeRef
+
 // core.rs contains all the unsafe code.
 // It should be kept as small as possible.
 // No bugs outside of core.rs should lead to memory unsafety.
@@ -47,6 +49,10 @@ use std::num::NonZeroUsize;
 /// ```
 ///
 /// See the [module-level documentation](index.html) for more.
+///
+// =============== IMPLEMENTATION SAFETY NOTES ===================
+//
+// TODO
 #[derive(Default)]
 pub struct IronedForest<T> {
     data: Vec<NodeData<T>>,
@@ -301,7 +307,7 @@ impl<'a, T> NodeBuilder<'a, T> {
         unsafe { &mut self.store.data.get_unchecked_mut(self.index).val }
     }
 
-    /// 
+    /// test
     pub fn build_child<R>(
         &mut self,
         initial_val: T,
@@ -314,7 +320,7 @@ impl<'a, T> NodeBuilder<'a, T> {
         self.get_child_builder(initial_val);
     }
 
-    pub fn get_child_builder(&mut self, initial_val: T) -> NodeBuilder<T> {
+    pub fn get_child_builder<'b>(&'b mut self, initial_val: T) -> NodeBuilder<'b, T> {
         let child_node_index = self.store.data.len();
         self.store.data.push(NodeData {
             val: initial_val,
