@@ -1,4 +1,6 @@
 // TODO: NodeRefMut to NodeRef
+// TODO: search for "store", rename.
+// TODO: rename "an"
 
 // core.rs contains all the unsafe code.
 // It should be kept as small as possible.
@@ -228,14 +230,14 @@ impl<T> IronedForest<T> {
 }
 
 /// `NodeData<T>` is the data that an [`IronedForest`] or [`IronedTree`] internally stores per node:
-/// the data `T` and a `usize` pointing to the next sibling of this node (0 if there is no next sibling).
+/// the data `T` and a `usize` indicating the number of nodes in the subtree that has this node as root.
 ///
 /// This type is not really intended to be used directly if you're a user of this library,
 /// but it is nevertheless exposed if there is a reason you want to access it
 /// (see e.g. [`IronedForest::raw_data`] and [`IronedTree::raw_data`])
 pub struct NodeData<T> {
     val: T,
-    next_sibling_offset: Option<NonZeroUsize>, // Difference between the index of the next sibling and the index of the current node. None if there is no next sibling.
+    subtree_size: NonZeroUsize,
 }
 
 impl<T> NodeData<T> {
@@ -244,8 +246,8 @@ impl<T> NodeData<T> {
         &self.val
     }
 
-    /// The offset (in the `Vec` that this [`IronedForest`] or [`IronedTree`] stores) to the next sibling of the current node (or `None` if there is no next sibling).
-    pub fn next_sibling_offset(&self) -> Option<NonZeroUsize> {
+    /// The number of nodes in the subtree that has this node as root (i.e. this node and all its descendants).
+    pub fn subtree_size(&self) -> NonZeroUsize {
         self.next_sibling_offset
     }
 }
@@ -254,15 +256,28 @@ impl<T> NodeData<T> {
 /// to an [`IronedTree`] or an [`IronedForest`].
 /// 
 /// See [`IronedTree::new`], [`IronedForest::build_tree`], [`IronedForest::get_tree_builder`], etc.
+/// 
+// IMPLEMENTATION NOTES:
+// The fields of the struct are:
+// - forest: mutable ref to the forest to which we're adding this node.
+// - index: the index where the node that we're adding will end up in self.forest.data
+// - subtree_size: the number of elements in the subtree that has this node as root,
+//   not counting children that haven't had finish() called on their NodeBuilder instances yet.
+//
+// INVARIANTS:
+// At any point in time while the NodeBuilder is alive, except during execution of its functions:
+// The values in the Vec forest.data between indices index+1 (inclusive) and index+subtree_size (exclusive)
+// are initialized, valid, and within the capacity of the Vec but outside of the len of the Vec.
 pub struct NodeBuilder<'a, T> {
-    store: &'a mut IronedForest<T>,
-    index: usize,                          // index of the node that we are constructing
-    last_added_child_index: Option<usize>, // to update next_sibling_offset
+    forest: &'a mut IronedForest<T>,
+    index: usize,
+    subtree_size: NonZeroUsize,
 }
 
 impl<'a, T> NodeBuilder<'a, T> {
     /// Read the value of the node that is currently being built.
     pub fn val(&self) -> &T {
+        // TODO: remove
         unsafe { &self.store.data.get_unchecked(self.index).val }
     }
 
@@ -304,6 +319,7 @@ impl<'a, T> NodeBuilder<'a, T> {
     /// assert_eq!(*sum_tree.root().val(), 1.2+3.4+5.6+7.8);
     /// ```
     pub fn val_mut(&mut self) -> &mut T {
+        // TODO: remove
         unsafe { &mut self.store.data.get_unchecked_mut(self.index).val }
     }
 
@@ -320,8 +336,49 @@ impl<'a, T> NodeBuilder<'a, T> {
         self.get_child_builder(initial_val);
     }
 
+    pub fn finish(self, val: T) {
+        unsafe {
+            // Write NodeData to the forest at index self.forest.
+            let data = &mut self.forest.data;
+            let old_len = data.len();
+            debug_assert!(self.index >= old_len);
+            data.reserve(self.index + self.subtree_size.get() - old_len);
+            let ptr = data.as_mut_ptr().add(self.index);
+            std::ptr::write(ptr, NodeData {
+                val,
+                subtree_size: self.subtree_size
+            });
+
+            if self.index == old_len {
+                // Safety requirements of set_len():
+                //
+                // 1. new_len must be less than or equal to capacity().
+                // We called data.reserve() above requesting precisely this many elements of capacity.
+                //
+                // 2. The elements at old_len..new_len must be initialized.
+                // There's no data between old_len and self.index because we just checked for that,
+                // the data at index self.index was initialized earlier in this function,
+                // and the data at indices [index+1..index+subtree_size] are initialized as per the invariants of NodeBuilder.
+                data.set_len(self.index + self.subtree_size.get());
+            }
+        }
+
+        // No need to conform to any invariants because self was consumed.
+    }
+
     pub fn get_child_builder<'b>(&'b mut self, initial_val: T) -> NodeBuilder<'b, T> {
-        let child_node_index = self.store.data.len();
+        let child_index = self.index + self.subtree_size;
+
+        unsafe {
+            let data = &mut self.store.data;
+            let len = data.len();
+            debug_assert!(child_index >= len);
+            data.reserve(child_index - len);
+            let ptr = data.as_mut_ptr().add(child_index);
+
+            ptr::write(end, value);
+        }
+
         self.store.data.push(NodeData {
             val: initial_val,
             next_sibling_offset: None,
