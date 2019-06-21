@@ -35,9 +35,11 @@
 //! ```
 
 mod core;
+mod tree;
 mod exactsize;
 mod serde;
 mod test;
 
 pub use crate::core::*;
 pub use crate::exactsize::*;
+pub use crate::tree::*;
