@@ -1,6 +1,4 @@
 // TODO: NodeRefMut to NodeRef
-// TODO: search for "store", rename.
-// TODO: rename "an"
 
 // core.rs contains all the unsafe code.
 // It should be kept as small as possible.
@@ -230,14 +228,14 @@ impl<T> IronedForest<T> {
 }
 
 /// `NodeData<T>` is the data that an [`IronedForest`] or [`IronedTree`] internally stores per node:
-/// the data `T` and a `usize` indicating the number of nodes in the subtree that has this node as root.
+/// the data `T` and a `usize` pointing to the next sibling of this node (0 if there is no next sibling).
 ///
 /// This type is not really intended to be used directly if you're a user of this library,
 /// but it is nevertheless exposed if there is a reason you want to access it
 /// (see e.g. [`IronedForest::raw_data`] and [`IronedTree::raw_data`])
 pub struct NodeData<T> {
     val: T,
-    subtree_size: NonZeroUsize,
+    next_sibling_offset: Option<NonZeroUsize>, // Difference between the index of the next sibling and the index of the current node. None if there is no next sibling.
 }
 
 impl<T> NodeData<T> {
@@ -246,8 +244,8 @@ impl<T> NodeData<T> {
         &self.val
     }
 
-    /// The number of nodes in the subtree that has this node as root (i.e. this node and all its descendants).
-    pub fn subtree_size(&self) -> NonZeroUsize {
+    /// The offset (in the `Vec` that this [`IronedForest`] or [`IronedTree`] stores) to the next sibling of the current node (or `None` if there is no next sibling).
+    pub fn next_sibling_offset(&self) -> Option<NonZeroUsize> {
         self.next_sibling_offset
     }
 }
@@ -256,28 +254,15 @@ impl<T> NodeData<T> {
 /// to an [`IronedTree`] or an [`IronedForest`].
 /// 
 /// See [`IronedTree::new`], [`IronedForest::build_tree`], [`IronedForest::get_tree_builder`], etc.
-/// 
-// IMPLEMENTATION NOTES:
-// The fields of the struct are:
-// - forest: mutable ref to the forest to which we're adding this node.
-// - index: the index where the node that we're adding will end up in self.forest.data
-// - subtree_size: the number of elements in the subtree that has this node as root,
-//   not counting children that haven't had finish() called on their NodeBuilder instances yet.
-//
-// INVARIANTS:
-// At any point in time while the NodeBuilder is alive, except during execution of its functions:
-// The values in the Vec forest.data between indices index+1 (inclusive) and index+subtree_size (exclusive)
-// are initialized, valid, and within the capacity of the Vec but outside of the len of the Vec.
 pub struct NodeBuilder<'a, T> {
-    forest: &'a mut IronedForest<T>,
-    index: usize,
-    subtree_size: NonZeroUsize,
+    store: &'a mut IronedForest<T>,
+    index: usize,                          // index of the node that we are constructing
+    last_added_child_index: Option<usize>, // to update next_sibling_offset
 }
 
 impl<'a, T> NodeBuilder<'a, T> {
     /// Read the value of the node that is currently being built.
     pub fn val(&self) -> &T {
-        // TODO: remove
         unsafe { &self.store.data.get_unchecked(self.index).val }
     }
 
@@ -319,10 +304,76 @@ impl<'a, T> NodeBuilder<'a, T> {
     /// assert_eq!(*sum_tree.root().val(), 1.2+3.4+5.6+7.8);
     /// ```
     pub fn val_mut(&mut self) -> &mut T {
-        // TODO: remove
         unsafe { &mut self.store.data.get_unchecked_mut(self.index).val }
     }
 
+    /// test
+    pub fn build_child<R>(
+        &mut self,
+        initial_val: T,
+        child_builder_cb: impl FnOnce(NodeBuilder<T>) -> R,
+    ) -> R {
+        child_builder_cb(self.get_child_builder(initial_val))
+    }
+
+    pub fn add_child(&mut self, initial_val: T) {
+        self.get_child_builder(initial_val);
+    }
+
+    pub fn get_child_builder<'b>(&'b mut self, initial_val: T) -> NodeBuilder<'b, T> {
+        let child_node_index = self.store.data.len();
+        self.store.data.push(NodeData {
+            val: initial_val,
+            next_sibling_offset: None,
+        });
+
+        // update next_sibling_offset of the last added node (if any)
+        if let Some(last_added_child_index) = self.last_added_child_index {
+            debug_assert!(last_added_child_index < child_node_index);
+            let offset = child_node_index - last_added_child_index;
+            debug_assert!(offset > 0);
+            unsafe {
+                self.store
+                    .data
+                    .get_unchecked_mut(last_added_child_index)
+                    .next_sibling_offset = Some(NonZeroUsize::new_unchecked(offset));
+            }
+        }
+        self.last_added_child_index = Some(child_node_index);
+
+        NodeBuilder {
+            store: self.store,
+            index: child_node_index,
+            last_added_child_index: None,
+        }
+    }
+}
+
+/// `LateValNodeBuilder` is a struct that lets you add children to a node that is currently being added
+/// to an [`IronedTree`] or an [`IronedForest`].
+/// 
+/// See [`IronedTree::new`], [`IronedForest::build_tree`], [`IronedForest::get_tree_builder`], etc. // TODO
+/// 
+// IMPLEMENTATION NOTES:
+// The fields of the struct are:
+// - forest: mutable ref to the forest to which we're adding this node.
+// - index: the index where the node that we're adding will end up in self.forest.data
+// - subtree_size: the number of elements in the subtree that has this node as root,
+//   not counting children that haven't had finish() called on their NodeBuilder instances yet.
+// - parent_subtree_size: mutable reference to the subtree_size of the parent node (None if no parent)
+//
+// INVARIANTS:
+// At any point in time while the NodeBuilder is alive, except during execution of its functions:
+// The values in the Vec forest.data between indices index+1 (inclusive) and index+subtree_size (exclusive)
+// are initialized, valid, and within the capacity of the Vec but outside of the len of the Vec.
+pub struct NodeBuilder<'a, T> {
+    forest: &'a mut IronedForest<T>,
+    index: usize,
+    subtree_size: NonZeroUsize,
+    parent_subtree_size: Option<&'a mut NonZeroUsize>
+}
+
+impl<'a, T> NodeBuilder<'a, T> {
     /// test
     pub fn build_child<R>(
         &mut self,
@@ -349,7 +400,19 @@ impl<'a, T> NodeBuilder<'a, T> {
                 subtree_size: self.subtree_size
             });
 
-            if self.index == old_len {
+            if let Some(parent_subtree_size) = self.parent_subtree_size {
+                // When there is a parent, we can update its subtree_size to include this node (and descendants).
+                //
+                // We must respect the invariants of the parent, namely that the nodes in indices parent.index+1 (inclusive)
+                // to parent.index+parent.subtree_size (exclusive) are initialized, valid, and within the capacity of the Vec.
+                //
+                // This node's index should be such that self.index == parent.index+parent.subtree_size.
+                *parent_subtree_size += self.subtree_size;
+            } else {
+                // self.parent_subtree_size should only be None when there is no parent,
+                // in which case the index of this node should be equal to the length of the data Vec.
+                debug_assert_eq!(self.index, old_len);
+
                 // Safety requirements of set_len():
                 //
                 // 1. new_len must be less than or equal to capacity().
