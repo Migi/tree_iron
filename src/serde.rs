@@ -14,7 +14,7 @@ use std::ops::Deref;
 #[derive(Deserialize)]
 struct FlatNode<T> {
     val: T,
-    offset: usize,
+    subtree_size: usize,
 }
 
 impl<T: Serialize> Serialize for IronedForest<T> {
@@ -73,11 +73,8 @@ impl<T: Serialize> Serialize for NodeData<T> {
         let mut s = serializer.serialize_struct("FlatNode", 2)?;
         s.serialize_field("val", self.val())?;
         s.serialize_field(
-            "offset",
-            &match self.next_sibling_offset() {
-                Some(offset) => offset.get(),
-                None => 0,
-            },
+            "subtree_size",
+            &self.subtree_size().get(),
         )?;
         s.end()
     }
@@ -114,7 +111,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                 type Value = ();
 
                 fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                    write!(formatter, "a node (which is a sequence of 2 elements)")
+                    write!(formatter, "a node")
                 }
 
                 fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
@@ -125,11 +122,11 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                         .next_element()?
                         .ok_or_else(|| de::Error::invalid_length(0, &self))?;
 
-                    let mut child_node_builder = self.node_builder.get_child_builder(val);
+                    let mut child_node_builder = self.node_builder.get_child_builder();
                     seq.next_element_seed(ChildrenDeserializer {
                         node_builder: &mut child_node_builder,
-                    })?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                    })?.ok_or_else(|| de::Error::invalid_length(1, &"can't deserialize children"))?;
+                    child_node_builder.finish(val);
 
                     Ok(())
                 }
@@ -200,7 +197,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                 type Value = ();
 
                 fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                    write!(formatter, "a node (which is a sequence of 2 elements)")
+                    write!(formatter, "a node")
                 }
 
                 fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
@@ -211,11 +208,12 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                         .next_element()?
                         .ok_or_else(|| de::Error::invalid_length(0, &self))?;
 
-                    let mut child_node_builder = self.tree_store_mut_ref.get_tree_builder(val);
+                    let mut child_node_builder = self.tree_store_mut_ref.get_tree_builder();
                     seq.next_element_seed(ChildrenDeserializer {
                         node_builder: &mut child_node_builder,
                     })?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(1, &"can't deserialize children"))?;
+                    child_node_builder.finish(val);
 
                     Ok(())
                 }
@@ -302,68 +300,54 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                     A: SeqAccess<'de>,
                 {
                     // reads n elements from the SeqAccess and adds them as nodes to the node_builder
-                    // if n is None, reads all elements until the end of the stream
-                    fn rec_add_n_children<'a, 'de, T: Deserialize<'de>, A: SeqAccess<'de>>(
+                    fn rec_add_n_children<'de, T: Deserialize<'de>, A: SeqAccess<'de>>(
                         seq: &mut A,
-                        n: Option<usize>,
-                        mut node_builder: NodeBuilder<'a, T>,
+                        n: usize,
+                        node_builder: &mut NodeBuilder<T>,
                     ) -> Result<(), A::Error> {
-                        match n {
-                            Some(n) => {
-                                let mut num_read = 0;
-                                while num_read < n {
-                                    if let Some(node) = seq.next_element::<FlatNode<T>>()? {
-                                        num_read += 1;
-                                        let max_num_left_to_read = n - num_read;
-                                        let n_rec = {
-                                            if node.offset == 0 {
-                                                max_num_left_to_read
-                                            } else {
-                                                if node.offset - 1 > max_num_left_to_read {
-                                                    return Err(de::Error::invalid_length(
-                                                        num_read,
-                                                        &"offset invalid",
-                                                    ));
-                                                }
-                                                node.offset - 1
-                                            }
-                                        };
-                                        let node_builder_rec = node_builder.get_child_builder(node.val);
-                                        rec_add_n_children(seq, Some(n_rec), node_builder_rec)?;
-                                        num_read += n_rec;
-                                    } else {
-                                        return Err(de::Error::invalid_length(
-                                            num_read,
-                                            &"offset too large",
-                                        ));
-                                    }
+                        let mut num_read = 0;
+                        while num_read < n {
+                            if let Some(node) = seq.next_element::<FlatNode<T>>()? {
+                                num_read += 1;
+                                let max_num_left_to_read = n - num_read;
+                                if node.subtree_size == 0 {
+                                    return Err(de::Error::invalid_length(
+                                        num_read,
+                                        &"subtree_size invalid",
+                                    ));
                                 }
-                            }
-                            None => {
-                                while let Some(node) = seq.next_element::<FlatNode<T>>()? {
-                                    let n_rec = {
-                                        if node.offset == 0 {
-                                            None
-                                        } else {
-                                            Some(node.offset - 1)
-                                        }
-                                    };
-                                    let node_builder_rec = node_builder.get_child_builder(node.val);
-                                    rec_add_n_children(seq, n_rec, node_builder_rec)?;
+                                let n_rec = node.subtree_size - 1;
+                                if n_rec > max_num_left_to_read {
+                                    return Err(de::Error::invalid_length(
+                                        num_read,
+                                        &"subtree_size invalid",
+                                    ));
                                 }
+                                let mut node_builder_rec = node_builder.get_child_builder();
+                                rec_add_n_children(seq, n_rec, &mut node_builder_rec)?;
+                                node_builder_rec.finish(node.val);
+                                num_read += n_rec;
+                            } else {
+                                return Err(de::Error::invalid_length(
+                                    num_read,
+                                    &"offset too large",
+                                ));
                             }
                         }
                         Ok(())
                     }
 
                     while let Some(node) = seq.next_element::<FlatNode<T>>()? {
-                        let offset = node.offset;
-                        let tree_builder = self.tree_store_mut_ref.get_tree_builder(node.val);
-                        if offset == 0 {
-                            rec_add_n_children(&mut seq, None, tree_builder)?;
-                        } else {
-                            rec_add_n_children(&mut seq, Some(offset - 1), tree_builder)?;
+                        let subtree_size = node.subtree_size;
+                        if subtree_size == 0 {
+                            return Err(de::Error::invalid_length(
+                                0,
+                                &"subtree_size invalid",
+                            ));
                         }
+                        let mut tree_builder = self.tree_store_mut_ref.get_tree_builder();
+                        rec_add_n_children(&mut seq, subtree_size-1, &mut tree_builder)?;
+                        tree_builder.finish(node.val);
                     }
 
                     Ok(())
@@ -387,22 +371,22 @@ mod tests {
 
     fn build_store() -> IronedForest<i32> {
         let mut store = IronedForest::new();
-        store.build_tree(2, |mut node| {
-            node.build_child(10, |mut node| {
+        store.build_tree(2, |node| {
+            node.build_child(10, |node| {
                 node.add_child(11);
                 node.add_child(12);
                 node.add_child(13);
             });
             node.add_child(20);
-            node.build_child(30, |mut node| {
+            node.build_child(30, |node| {
                 node.add_child(31);
                 node.add_child(32);
                 node.add_child(33);
             });
         });
-        store.build_tree(3, |mut node| {
+        store.build_tree(3, |node| {
             node.add_child(10);
-            node.build_child(20, |mut node| {
+            node.build_child(20, |node| {
                 node.add_child(21);
                 node.add_child(22);
                 node.add_child(23);

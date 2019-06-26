@@ -199,7 +199,7 @@ mod tests {
     use crate::*;
 
     /**
-     * Builds two trees (in an intentially convoluted way) that look like this
+     * Builds two trees that look like this
      *  - 2
      *      - 10
      *          - 11
@@ -222,28 +222,22 @@ mod tests {
      */
     fn build_store(test: Arc<CheckedTest>) -> IronedForest<Checked<i32>> {
         let mut store = IronedForest::new();
-        store.build_tree(Checked::new(1, test.clone()), |mut node| {
-            node.build_child(Checked::new(8, test.clone()), |mut node| {
+        store.build_tree(Checked::new(2, test.clone()), |node| {
+            node.build_child(Checked::new(10, test.clone()), |node| {
                 node.add_child(Checked::new(11, test.clone()));
                 node.add_child(Checked::new(12, test.clone()));
-                assert_eq!(node.val().val, 8); // `node` is the node we're currently adding children to (inital value was 8)
-                *node.val_mut() = Checked::new(9, test.clone()); // set its value to 9
                 node.add_child(Checked::new(13, test.clone()));
-                assert_eq!(node.val().val, 9); // `node` is the node we're currently adding children to (inital value was 8, current value 9)
-                *node.val_mut() = Checked::new(10, test.clone()); // set its value to 10
             });
             node.add_child(Checked::new(20, test.clone()));
-            node.build_child(Checked::new(30, test.clone()), |mut node| {
+            node.build_child(Checked::new(30, test.clone()), |node| {
                 node.add_child(Checked::new(31, test.clone()));
                 node.add_child(Checked::new(32, test.clone()));
                 node.add_child(Checked::new(33, test.clone()));
             });
-            assert_eq!(node.val().val, 1); // `node` is the root node (initial value 1)
-            *node.val_mut() = Checked::new(2, test.clone()); // set its value to 2
         });
-        store.build_tree(Checked::new(3, test.clone()), |mut node| {
+        store.build_tree(Checked::new(3, test.clone()), |node| {
             node.add_child(Checked::new(10, test.clone()));
-            node.build_child(Checked::new(20, test.clone()), |mut node| {
+            node.build_child(Checked::new(20, test.clone()), |node| {
                 node.add_child(Checked::new(21, test.clone()));
                 node.add_child(Checked::new(22, test.clone()));
                 node.add_child(Checked::new(23, test.clone()));
