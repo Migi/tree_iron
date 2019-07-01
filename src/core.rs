@@ -3,6 +3,13 @@
 // TODO: rename "an"
 // TODO: search all instances of "| mut"
 // TODO: indexing
+// TODO: clear
+// TODO: return NodeRefMut on creation
+// TODO: #[inline]?
+// TODO: check safety of overflow
+// TODO: #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug, Hash)]?
+// TODO: update dep versions
+// TODO: clippy
 
 // core.rs contains all the unsafe code.
 // It should be kept as small as possible.
