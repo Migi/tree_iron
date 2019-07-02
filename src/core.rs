@@ -10,6 +10,7 @@
 // TODO: #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug, Hash)]?
 // TODO: update dep versions
 // TODO: clippy
+// TODO: tests for leaks on panic
 
 // core.rs contains all the unsafe code.
 // It should be kept as small as possible.
@@ -318,6 +319,25 @@ pub struct NodeBuilder<'a, T> {
     parent_subtree_size: Option<&'a mut NonZeroUsize>,
 }
 
+impl<'a, T> Drop for NodeBuilder<'a, T> {
+    fn drop(&mut self) {
+        unsafe {
+            let data = &mut self.forest.data;
+
+            // Drop the elements in the Vec on indices [index+1 .. index+subtree_size]
+            // These are initialized, valid, and within the capacity of the Vec due to invariant 1,
+            // but they are outside the len of the Vec so we can drop the data
+            for i in 1..self.subtree_size.get() {
+                // Calculate where to read the NodeData to drop.
+                // This is safe since self.index+i < data.capacity < isize::MAX
+                let ptr = data.as_mut_ptr().add(self.index+i);
+                let node_data : NodeData<T> = std::ptr::read(ptr);
+                drop(node_data);
+            }
+        }
+    }
+}
+
 impl<'a, T> NodeBuilder<'a, T> {
     /// test
     pub fn build_child<R>(
@@ -347,7 +367,7 @@ impl<'a, T> NodeBuilder<'a, T> {
         }
     }
 
-    pub fn finish(self, val: T) {
+    pub fn finish(mut self, val: T) {
         unsafe {
             let data = &mut self.forest.data;
             let data_len = data.len();
@@ -374,10 +394,12 @@ impl<'a, T> NodeBuilder<'a, T> {
                 data.set_len(cur_capacity);
                 data.reserve(needed_capacity - data_len);
                 data.set_len(data_len);
+
+                // TODO: rework using from_raw_parts
             }
             
             // Calculate where to write the data.
-            // This is safe since self.index <= data.capacity < isize::MAX
+            // This is safe since self.index < data.capacity < isize::MAX
             let ptr = data.as_mut_ptr().add(self.index);
 
             // Write NodeData to the forest at calculated location
@@ -387,11 +409,11 @@ impl<'a, T> NodeBuilder<'a, T> {
                 subtree_size: self.subtree_size
             });
 
-            if let Some(parent_subtree_size) = self.parent_subtree_size {
+            if let Some(ref mut parent_subtree_size) = self.parent_subtree_size {
                 // There is a parent, so we should update its subtree_size to include this Node and descendants.
                 // Since this node has self.subtree_size descendants (including itself), this means adding
                 // self.subtree_size to parent.subtree_size.
-                *parent_subtree_size = NonZeroUsize::new_unchecked(parent_subtree_size.get() + self.subtree_size.get());
+                std::mem::replace(*parent_subtree_size, NonZeroUsize::new_unchecked(parent_subtree_size.get() + self.subtree_size.get()));
 
                 // We need to prove that the parent's invariants are not violated here.
                 //
@@ -438,6 +460,8 @@ impl<'a, T> NodeBuilder<'a, T> {
                 data.set_len(self.index + self.subtree_size.get());
             }
         }
+
+        std::mem::forget(self);
     }
 }
 
@@ -485,9 +509,18 @@ impl<'t, T> Iterator for NodeIter<'t, T> {
 }
 
 /// test
-#[derive(Clone, Copy)]
 pub struct NodeRef<'t, T> {
     slice: &'t [NodeData<T>], // contains (only) the current node and all its descendants
+}
+
+// Not using #[derive(Copy)] because it adds the T:Copy bound, which is unnecessary
+impl<'t,T> Copy for NodeRef<'t,T> {}
+
+// Not using #[derive(Clone)] because it adds the T:Clone bound, which is unnecessary
+impl<'t,T> Clone for NodeRef<'t,T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl<'t, T> NodeRef<'t, T> {
