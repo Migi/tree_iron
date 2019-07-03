@@ -11,12 +11,14 @@
 // TODO: update dep versions
 // TODO: clippy
 // TODO: tests for leaks on panic
+// TODO: potential Sync and Send for all pointer-owning types
 
 // core.rs contains all the unsafe code.
 // It should be kept as small as possible.
 // No bugs outside of core.rs should lead to memory unsafety.
 use std::iter::Iterator;
 use std::num::NonZeroUsize;
+use std::ptr;
 
 /// An `IronedForest` is a list of trees, all stored in a single `Vec` with only 1 `usize` overhead per node.
 /// This allows for fast and cache-friendly iteration (in pre-order or depth-first order) and efficient storage of the trees.
@@ -468,7 +470,10 @@ impl<'a, T> NodeBuilder<'a, T> {
 /// test
 #[derive(Copy)]
 pub struct NodeIter<'t, T> {
-    remaining_nodes: &'t [NodeData<T>], // contains (only) the nodes in the iterator and all their descendants
+    data_ptr: ptr::NonNull<NodeData<T>>,
+    cur_index: usize,
+    end_index: usize,
+    phantom_borrow: PhandomData<&'t [NodeData<T>]>,
 }
 
 impl<'t, T> Clone for NodeIter<'t, T> {
@@ -481,36 +486,45 @@ impl<'t, T> Clone for NodeIter<'t, T> {
 
 impl<'t, T> NodeIter<'t, T> {
     pub fn remaining_subtrees_size(&self) -> usize {
-        self.remaining_nodes.len()
+        self.end_index - self.cur_index
     }
 }
 
 impl<'t, T> Iterator for NodeIter<'t, T> {
     type Item = NodeRef<'t, T>;
     fn next(&mut self) -> Option<Self::Item> {
-        self.remaining_nodes.get(0).map(|cur_node| {
-            // TODO: try simplifying
+        if self.cur_index < self.end_index {
+            unsafe {
+                let index = self.cur_index;
 
-            // move the slice out of self, so we can split_at() it without borrowing it.
-            let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
+                // safety of the ptr::add():
+                // self.cur_index should be within the capacity of the Vec,
+                // and this capacity should be <= isize::MAX bytes // TODO
+                let cur_node_data : &NodeData<T> = &*self.data_ptr.as_ptr().add(index);
+                let cur_node_subtree_size = cur_node_data.subtree_size;
 
-            // split off the first node and its descendants
-            let (cur_node_slice, next_nodes_slice) =
-                remaining_nodes.split_at(cur_node.subtree_size.get());
+                self.cur_index += cur_node_subtree_size;
 
-            // update self.remaining_nodes
-            self.remaining_nodes = next_nodes_slice;
+                // cur_index shouldn't be larger than end_index. It should at most be equal (if there are no nodes left)
+                debug_assert!(self.cur_index <= self.end_index);
 
-            NodeRef {
-                slice: cur_node_slice,
+                NodeRef {
+                    data_ptr: self.data_ptr,
+                    index,
+                    phantom_borrow: PhandomData
+                }
             }
-        })
+        } else {
+            None
+        }
     }
 }
 
 /// test
 pub struct NodeRef<'t, T> {
-    slice: &'t [NodeData<T>], // contains (only) the current node and all its descendants
+    data_ptr: ptr::NonNull<NodeData<T>>,
+    index: usize,
+    phantom_borrow: PhandomData<&'t [NodeData<T>]>,
 }
 
 // Not using #[derive(Copy)] because it adds the T:Copy bound, which is unnecessary
@@ -525,8 +539,17 @@ impl<'t,T> Clone for NodeRef<'t,T> {
 
 impl<'t, T> NodeRef<'t, T> {
     pub fn children(&self) -> NodeIter<'t, T> {
-        let (_, remaining_nodes) = self.slice.split_first().unwrap();
-        NodeIter { remaining_nodes }
+        // safety of the ptr::add():
+        // self.index should be within the capacity of the Vec,
+        // and this capacity should be <= isize::MAX bytes // TODO
+        let data : &NodeData<T> = &*self.data_ptr.as_ptr().add(self.index);
+        let subtree_size = data.subtree_size;
+
+        NodeIter {
+            data_ptr: self.data_ptr,
+            start_ptr: self.index,
+            end_ptr: self.index + subtree_size
+        }
     }
 
     pub fn val(&self) -> &T {
