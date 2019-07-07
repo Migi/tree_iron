@@ -18,6 +18,44 @@
 use std::iter::Iterator;
 use std::num::NonZeroUsize;
 
+/// Split off the first n elements of the pointed-to slice, modifying it.
+/// Does *not* check that n <= len.
+/// Implementation is similar to std::slice::split_at_mut
+unsafe fn slice_split_off_first_n_unchecked<'a,T>(slice: &'a mut &[T], n: usize) -> &'a [T] {
+    let len = slice.len();
+    let ptr = slice.as_ptr();
+
+    debug_assert!(n <= len);
+
+    *slice = std::slice::from_raw_parts(ptr.add(n), len - n);
+    std::slice::from_raw_parts(ptr, n)
+}
+
+/// Split off the first n elements of the pointed-to slice, modifying it.
+/// Does *not* check that n <= len.
+/// Implementation is similar to std::slice::split_at_mut
+unsafe fn slice_split_off_first_n_unchecked_mut<'a,T>(slice: &'a mut &mut [T], n: usize) -> &'a mut [T] {
+    let len = slice.len();
+    let ptr = slice.as_ptr_mut();
+
+    debug_assert!(n <= len);
+
+    *slice = std::slice::from_raw_parts_mut(ptr.add(n), len - n);
+    std::slice::from_raw_parts_mut(ptr, n)
+}
+
+/// Split off the first element of the slice.
+/// Does *not* check that the slice isn't empty.
+unsafe fn slice_split_first_unchecked<T>(slice: &[T]) -> (&T,&[T]) {
+    (slice.get_unchecked(0),slice.get_unchecked(1..))
+}
+
+/// Split off the first element of the slice.
+/// Does *not* check that the slice isn't empty.
+unsafe fn slice_split_first_unchecked_mut<T>(slice: &mut [T]) -> (&mut T,&mut [T]) {
+    (slice.get_unchecked_mut(0),slice.get_unchecked_mut(1..))
+}
+
 /// An `IronedForest` is a list of trees, all stored in a single `Vec` with only 1 `usize` overhead per node.
 /// This allows for fast and cache-friendly iteration (in pre-order or depth-first order) and efficient storage of the trees.
 ///
