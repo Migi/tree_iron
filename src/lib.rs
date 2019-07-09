@@ -34,6 +34,9 @@
 //! assert_eq!(count_num_nodes(tree.root()), 4);
 //! ```
 
+#[macro_use]
+extern crate derive_destructure;
+
 mod core;
 mod tree;
 mod exactsize;

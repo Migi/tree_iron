@@ -2,15 +2,16 @@
 // TODO: search for "store", rename.
 // TODO: rename "an"
 // TODO: search all instances of "| mut"
+// TODO: rename "|node|" in examples/tests with "|node_builder|"
 // TODO: indexing
-// TODO: clear
 // TODO: return NodeRefMut on creation
-// TODO: #[inline]?
 // TODO: check safety of overflow
 // TODO: #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug, Hash)]?
 // TODO: update dep versions
 // TODO: clippy
 // TODO: tests for leaks on panic
+// TODO: Sync/Send on pointer-owning types
+// TODO: #[inline]
 
 // core.rs contains all the unsafe code.
 // It should be kept as small as possible.
@@ -20,40 +21,50 @@ use std::num::NonZeroUsize;
 
 /// Split off the first n elements of the pointed-to slice, modifying it.
 /// Does *not* check that n <= len.
-/// Implementation is similar to std::slice::split_at_mut
-unsafe fn slice_split_off_first_n_unchecked<'a,T>(slice: &'a mut &[T], n: usize) -> &'a [T] {
-    let len = slice.len();
-    let ptr = slice.as_ptr();
+/// Implementation is similar to std::slice::split_at_mut.
+#[inline(always)]
+unsafe fn slice_split_off_first_n_unchecked<'a,T>(slice_ref: &mut &'a [T], n: usize) -> &'a [T] {
+    let len = slice_ref.len();
+    let ptr = slice_ref.as_ptr();
 
     debug_assert!(n <= len);
 
-    *slice = std::slice::from_raw_parts(ptr.add(n), len - n);
+    *slice_ref = std::slice::from_raw_parts(ptr.add(n), len - n);
     std::slice::from_raw_parts(ptr, n)
 }
 
 /// Split off the first n elements of the pointed-to slice, modifying it.
 /// Does *not* check that n <= len.
 /// Implementation is similar to std::slice::split_at_mut
-unsafe fn slice_split_off_first_n_unchecked_mut<'a,T>(slice: &'a mut &mut [T], n: usize) -> &'a mut [T] {
-    let len = slice.len();
-    let ptr = slice.as_ptr_mut();
+#[inline(always)]
+unsafe fn slice_split_off_first_n_unchecked_mut<'a,T>(slice_ref: &mut &'a mut [T], n: usize) -> &'a mut [T] {
+    let len = slice_ref.len();
+    let ptr = slice_ref.as_mut_ptr();
 
     debug_assert!(n <= len);
 
-    *slice = std::slice::from_raw_parts_mut(ptr.add(n), len - n);
+    *slice_ref = std::slice::from_raw_parts_mut(ptr.add(n), len - n);
     std::slice::from_raw_parts_mut(ptr, n)
 }
 
 /// Split off the first element of the slice.
 /// Does *not* check that the slice isn't empty.
+#[inline(always)]
 unsafe fn slice_split_first_unchecked<T>(slice: &[T]) -> (&T,&[T]) {
+    debug_assert!(slice.len() > 0);
     (slice.get_unchecked(0),slice.get_unchecked(1..))
 }
 
 /// Split off the first element of the slice.
 /// Does *not* check that the slice isn't empty.
+#[inline(always)]
 unsafe fn slice_split_first_unchecked_mut<T>(slice: &mut [T]) -> (&mut T,&mut [T]) {
-    (slice.get_unchecked_mut(0),slice.get_unchecked_mut(1..))
+    let len = slice.len();
+    let ptr = slice.as_mut_ptr();
+    
+    debug_assert!(len > 0);
+
+    (slice.get_unchecked_mut(0),std::slice::from_raw_parts_mut(ptr.add(1), len - 1))
 }
 
 /// An `IronedForest` is a list of trees, all stored in a single `Vec` with only 1 `usize` overhead per node.
@@ -109,6 +120,7 @@ pub struct IronedForest<T> {
 
 impl<T> IronedForest<T> {
     /// Create a new [`IronedForest`].
+    #[inline(always)]
     pub fn new() -> IronedForest<T> {
         IronedForest {
             data: Vec::new(),
@@ -116,6 +128,7 @@ impl<T> IronedForest<T> {
     }
 
     /// Create a new [`IronedForest`] with the specified capacity for the inner `Vec` which stores the nodes (see [`Vec::with_capacity`]).
+    #[inline(always)]
     pub fn with_capacity(capacity: usize) -> IronedForest<T> {
         IronedForest {
             data: Vec::with_capacity(capacity),
@@ -130,6 +143,7 @@ impl<T> IronedForest<T> {
     /// used to add nodes to the root node. The value returned by `node_builder_cb` becomes the return value of this function.
     /// 
     /// For complex use cases where callbacks can get in the way, [`get_tree_builder`](`IronedForest::get_tree_builder`) may be more ergonomic.
+    #[inline]
     pub fn build_tree<R>(
         &mut self,
         root_val: T,
@@ -147,6 +161,7 @@ impl<T> IronedForest<T> {
     /// used to add nodes to the root node. The value returned by `node_builder_cb` becomes the return value of this function.
     /// 
     /// For complex use cases where callbacks can get in the way, [`get_tree_builder`](`IronedForest::get_tree_builder`) may be more ergonomic.
+    #[inline]
     pub fn build_tree_by_ret_val(
         &mut self,
         node_builder_cb: impl FnOnce(&mut NodeBuilder<T>) -> T,
@@ -157,6 +172,7 @@ impl<T> IronedForest<T> {
     }
 
     /// Add a tree with only a single node to the forest. The parameter `val` is the value of that single node.
+    #[inline]
     pub fn add_single_node_tree(&mut self, val: T) {
         self.get_tree_builder().finish(val);
     }
@@ -173,8 +189,8 @@ impl<T> IronedForest<T> {
     /// use tree_iron::{IronedTree, NodeRef, NodeBuilder};
     /// 
     /// // Assume you already have some kind of tree with floating point values, like this:
-    /// let value_tree = IronedTree::new(1.2, |mut node| {
-    ///     node.build_child(3.4, |mut node| {
+    /// let value_tree = IronedTree::new(1.2, |node| {
+    ///     node.build_child(3.4, |node| {
     ///         node.add_child(5.6);
     ///     });
     ///     node.add_child(7.8);
@@ -202,6 +218,7 @@ impl<T> IronedForest<T> {
     /// 
     /// assert_eq!(*sum_tree.root().val(), 1.2+3.4+5.6+7.8);
     /// ```
+    #[inline]
     pub fn get_tree_builder(&mut self) -> NodeBuilder<T> {
         // NodeBuilder's invariants (see comments at structure definition of NodeBuilder):
         // Invariant 1 is satisfied because the new NodeBuilder's subtree_size is 1,
@@ -217,6 +234,7 @@ impl<T> IronedForest<T> {
     }
 
     /// Returns an iterator that iterates over (a [`NodeRef`] to) all the trees in this forest.
+    #[inline(always)]
     pub fn iter_trees(&self) -> NodeIter<T> {
         NodeIter {
             remaining_nodes: &self.data,
@@ -226,6 +244,7 @@ impl<T> IronedForest<T> {
     /// Returns an iterator that iterates over [`NodeRefMut`]s to all the trees in this forest.
     /// With this iterator you can change values of nodes in the tree (see [`NodeRefMut::val_mut`]),
     /// but you can't change the structure of the tree.
+    #[inline(always)]
     pub fn iter_trees_mut(&mut self) -> NodeIterMut<T> {
         NodeIterMut {
             remaining_nodes: &mut self.data[..],
@@ -240,6 +259,7 @@ impl<T> IronedForest<T> {
     /// without iterating over all the values in it, then the values of the nodes that were not iterated over
     /// will also be leaked. Leaking is considered "safe" in Rust, so this function is safe,
     /// but you still probably want to avoid doing that.
+    #[inline(always)]
     pub fn drain_trees(&mut self) -> NodeListDrain<'_, T> {
         // first, get the current length of the data vector.
         let old_len = self.data.len();
@@ -269,7 +289,47 @@ impl<T> IronedForest<T> {
         }
     }
 
+    #[inline(always)]
+    pub fn get(&self, index: usize) -> Option<NodeRef<T>> {
+        if index < self.data.len() {
+            Some(unsafe { self.get_unchecked(index) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_mut(&mut self, index: usize) -> Option<NodeRefMut<T>> {
+        if index < self.data.len() {
+            Some(unsafe { self.get_unchecked_mut(index) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn get_unchecked(&self, index: usize) -> NodeRef<T> {
+        let subtree_size = self.data.get_unchecked(index).subtree_size.get();
+        NodeRef {
+            slice: self.data.get_unchecked(index..(index+subtree_size))
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn get_unchecked_mut(&mut self, index: usize) -> NodeRefMut<T> {
+        let subtree_size = self.data.get_unchecked(index).subtree_size.get();
+        NodeRefMut {
+            slice: self.data.get_unchecked_mut(index..(index+subtree_size))
+        }
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.data.clear()
+    }
+
     /// Iterate over all the values in all the nodes of all the trees in this forest, in pre-order order.
+    #[inline(always)]
     pub fn iter_flattened<'a>(
         &'a self,
     ) -> std::iter::Map<std::slice::Iter<'a, NodeData<T>>, impl FnMut(&'a NodeData<T>) -> &'a T>
@@ -278,6 +338,7 @@ impl<T> IronedForest<T> {
     }
 
     /// Iterate mutably over all the values in all the nodes of all the trees in this forest, in pre-order order.
+    #[inline(always)]
     pub fn iter_flattened_mut<'a>(
         &'a mut self,
     ) -> std::iter::Map<
@@ -291,6 +352,7 @@ impl<T> IronedForest<T> {
     /// 
     /// **WARNING:** Leaking the returned iterator without iterating over all of its values will leak the
     /// values that were not iterated over.
+    #[inline(always)]
     pub fn drain_flattened(
         &mut self,
     ) -> std::iter::Map<std::vec::Drain<NodeData<T>>, impl FnMut(NodeData<T>) -> T> {
@@ -299,11 +361,13 @@ impl<T> IronedForest<T> {
 
     /// Returns a read-only view over the raw data stored internally by this `IronedForest`.
     /// This is not really recommended to be used except for very advanced use cases.
+    #[inline(always)]
     pub fn raw_data(&self) -> &Vec<NodeData<T>> {
         &self.data
     }
 
     /// Returns how many nodes are currently in all the trees in this forest in O(1) time.
+    #[inline(always)]
     pub fn tot_num_nodes(&self) -> usize {
         self.data.len()
     }
@@ -322,11 +386,13 @@ pub struct NodeData<T> {
 
 impl<T> NodeData<T> {
     /// The value of the node.
+    #[inline(always)]
     pub fn val(&self) -> &T {
         &self.val
     }
 
     /// The number of nodes in the subtree that has this node as root (i.e. this node and all its descendants).
+    #[inline(always)]
     pub fn subtree_size(&self) -> NonZeroUsize {
         self.subtree_size
     }
@@ -350,6 +416,7 @@ impl<T> NodeData<T> {
 //    are initialized, valid, and within the capacity of the Vec but outside of the len of the Vec.
 // 2. If this node has a parent, self.index must be equal to parent.index + parent.subtree_size,
 //    otherwise index must be equal to forest.data.len().
+#[derive(destructure)]
 pub struct NodeBuilder<'a, T> {
     forest: &'a mut IronedForest<T>,
     index: usize,
@@ -364,7 +431,11 @@ impl<'a, T> Drop for NodeBuilder<'a, T> {
 
             // Drop the elements in the Vec on indices [index+1 .. index+subtree_size]
             // These are initialized, valid, and within the capacity of the Vec due to invariant 1,
-            // but they are outside the len of the Vec so we can drop the data
+            // but they are outside the len of the Vec so we can drop the data.
+            //
+            // Also, if this node has a parent, then we must make sure that the parent NodeBuilder won't also drop these nodes.
+            // Luckily, this is the case, because self.index = parent.index+parent.subtree_size due to invariant 2,
+            // so the parent's slice does *not* contain the nodes that we're about to drop due to the parent's invariant 1.
             for i in 1..self.subtree_size.get() {
                 // Calculate where to read the NodeData to drop.
                 // This is safe since self.index+i < data.capacity < isize::MAX
@@ -378,6 +449,7 @@ impl<'a, T> Drop for NodeBuilder<'a, T> {
 
 impl<'a, T> NodeBuilder<'a, T> {
     /// test
+    #[inline]
     pub fn build_child<R>(
         &mut self,
         root_val: T,
@@ -389,10 +461,12 @@ impl<'a, T> NodeBuilder<'a, T> {
         ret
     }
 
+    #[inline]
     pub fn add_child(&mut self, val: T) {
         self.get_child_builder().finish(val);
     }
 
+    #[inline]
     pub fn get_child_builder<'b>(&'b mut self) -> NodeBuilder<'b, T> {
         // Invariant 1 is satisfied because the child's NodeBuilder's subtree_size is 1,
         // so there are no elements with those indices.
@@ -405,13 +479,19 @@ impl<'a, T> NodeBuilder<'a, T> {
         }
     }
 
-    pub fn finish(mut self, val: T) {
+    #[inline]
+    pub fn finish(self, val: T) -> NodeRefMut<'a,T> {
         unsafe {
-            let data = &mut self.forest.data;
+            // Destructure self, preventing it from being dropped.
+            // We do this as the very first thing so that if at any point during this function there is a panic,
+            // we can be sure that there won't be a double drop (worst case scenario there's a leak, which is safe).
+            let (forest, index, subtree_size, mut parent_subtree_size_ref_mut) = self.destructure();
+
+            let data = &mut forest.data;
             let data_len = data.len();
 
             // Check (part of) invariant 1
-            debug_assert!(self.index >= data_len);
+            debug_assert!(index >= data_len);
 
             // Make sure data can hold at least self.index + self.subtree_size elements
             // I'd like to just call data.reserve(self.index + self.subtree_size.get() - data_len) and be done with it.
@@ -422,7 +502,7 @@ impl<'a, T> NodeBuilder<'a, T> {
             // So what we do instead is this:
             //
             // First, check if the current capacity is already enough. If so, do nothing.
-            let needed_capacity = self.index + self.subtree_size.get();
+            let needed_capacity = index + subtree_size.get();
             let cur_capacity = data.capacity();
             if needed_capacity > cur_capacity {
                 // In this branch the current capacity is not enough.
@@ -438,20 +518,20 @@ impl<'a, T> NodeBuilder<'a, T> {
             
             // Calculate where to write the data.
             // This is safe since self.index < data.capacity < isize::MAX
-            let ptr = data.as_mut_ptr().add(self.index);
+            let ptr = data.as_mut_ptr().add(index);
 
             // Write NodeData to the forest at calculated location
             // This is outside the len, but inside the capacity
             std::ptr::write(ptr, NodeData {
                 val,
-                subtree_size: self.subtree_size
+                subtree_size
             });
 
-            if let Some(ref mut parent_subtree_size) = self.parent_subtree_size {
+            if let Some(ref mut parent_subtree_size) = parent_subtree_size_ref_mut {
                 // There is a parent, so we should update its subtree_size to include this Node and descendants.
                 // Since this node has self.subtree_size descendants (including itself), this means adding
                 // self.subtree_size to parent.subtree_size.
-                std::mem::replace(*parent_subtree_size, NonZeroUsize::new_unchecked(parent_subtree_size.get() + self.subtree_size.get()));
+                std::mem::replace(*parent_subtree_size, NonZeroUsize::new_unchecked(parent_subtree_size.get() + subtree_size.get()));
 
                 // We need to prove that the parent's invariants are not violated here.
                 //
@@ -481,7 +561,7 @@ impl<'a, T> NodeBuilder<'a, T> {
                 // can update the len of the forest's data vector.
                 
                 // The current len should be equal to self.index (see invariant 2)
-                debug_assert_eq!(self.index, data_len);
+                debug_assert_eq!(index, data_len);
 
                 // We now add self.subtree_size to that length.
                 //
@@ -495,11 +575,13 @@ impl<'a, T> NodeBuilder<'a, T> {
                 // the data at index self.index was initialized earlier in this function,
                 // and the data at indices [self.index+1..self.index+self.subtree_size]
                 // are initialized due to invariant 1.
-                data.set_len(self.index + self.subtree_size.get());
+                data.set_len(index + subtree_size.get());
+            }
+            
+            NodeRefMut {
+                slice: forest.data.get_unchecked_mut(index .. (index+subtree_size.get()))
             }
         }
-
-        std::mem::forget(self);
     }
 }
 
@@ -510,6 +592,7 @@ pub struct NodeIter<'t, T> {
 }
 
 impl<'t, T> Clone for NodeIter<'t, T> {
+    #[inline(always)]
     fn clone(&self) -> Self {
         Self {
             remaining_nodes: self.remaining_nodes,
@@ -518,6 +601,7 @@ impl<'t, T> Clone for NodeIter<'t, T> {
 }
 
 impl<'t, T> NodeIter<'t, T> {
+    #[inline(always)]
     pub fn remaining_subtrees_size(&self) -> usize {
         self.remaining_nodes.len()
     }
@@ -525,22 +609,11 @@ impl<'t, T> NodeIter<'t, T> {
 
 impl<'t, T> Iterator for NodeIter<'t, T> {
     type Item = NodeRef<'t, T>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.remaining_nodes.get(0).map(|cur_node| {
-            // TODO: try simplifying
-
-            // move the slice out of self, so we can split_at() it without borrowing it.
-            let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
-
-            // split off the first node and its descendants
-            let (cur_node_slice, next_nodes_slice) =
-                remaining_nodes.split_at(cur_node.subtree_size.get());
-
-            // update self.remaining_nodes
-            self.remaining_nodes = next_nodes_slice;
-
             NodeRef {
-                slice: cur_node_slice,
+                slice: unsafe { slice_split_off_first_n_unchecked(&mut self.remaining_nodes, cur_node.subtree_size.get()) }
             }
         })
     }
@@ -556,26 +629,31 @@ impl<'t,T> Copy for NodeRef<'t,T> {}
 
 // Not using #[derive(Clone)] because it adds the T:Clone bound, which is unnecessary
 impl<'t,T> Clone for NodeRef<'t,T> {
+    #[inline(always)]
     fn clone(&self) -> Self {
         *self
     }
 }
 
 impl<'t, T> NodeRef<'t, T> {
+    #[inline(always)]
     pub fn children(&self) -> NodeIter<'t, T> {
-        let (_, remaining_nodes) = self.slice.split_first().unwrap();
+        let (_, remaining_nodes) = unsafe { slice_split_first_unchecked(self.slice) };
         NodeIter { remaining_nodes }
     }
 
+    #[inline(always)]
     pub fn val(&self) -> &T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &self.slice.get_unchecked(0).val }
     }
 
+    #[inline(always)]
     pub fn num_descendants_incl_self(&self) -> usize {
         self.slice.len()
     }
 
+    #[inline(always)]
     pub fn num_descendants_excl_self(&self) -> usize {
         self.slice.len() - 1
     }
@@ -587,6 +665,7 @@ pub struct NodeIterMut<'t, T> {
 
 impl<'t, T> Iterator for NodeIterMut<'t, T> {
     type Item = NodeRefMut<'t, T>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.remaining_nodes
             .get(0)
@@ -612,6 +691,7 @@ impl<'t, T> Iterator for NodeIterMut<'t, T> {
 }
 
 impl<'t, T> NodeIterMut<'t, T> {
+    #[inline(always)]
     pub fn remaining_subtrees_size(&self) -> usize {
         self.remaining_nodes.len()
     }
@@ -622,30 +702,36 @@ pub struct NodeRefMut<'t, T> {
 }
 
 impl<'t, T> NodeRefMut<'t, T> {
+    #[inline(always)]
     pub fn into_children(self) -> NodeIterMut<'t, T> {
         let (_, remaining_nodes) = self.slice.split_first_mut().unwrap();
         NodeIterMut { remaining_nodes }
     }
 
+    #[inline(always)]
     pub fn children(&mut self) -> NodeIterMut<T> {
         let (_, remaining_nodes) = self.slice.split_first_mut().unwrap();
         NodeIterMut { remaining_nodes }
     }
 
+    #[inline(always)]
     pub fn val(&self) -> &T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &self.slice.get_unchecked(0).val }
     }
 
+    #[inline(always)]
     pub fn val_mut(&mut self) -> &mut T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &mut self.slice.get_unchecked_mut(0).val }
     }
 
+    #[inline(always)]
     pub fn num_descendants_incl_self(&self) -> usize {
         self.slice.len()
     }
 
+    #[inline(always)]
     pub fn num_descendants_excl_self(&self) -> usize {
         self.slice.len() - 1
     }
@@ -674,6 +760,7 @@ impl<'t, T> Drop for NodeListDrain<'t, T> {
 
 impl<'t, T> Iterator for NodeListDrain<'t, T> {
     type Item = NodeDrain<'t, T>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.remaining_nodes
             .get(0)
@@ -697,6 +784,7 @@ impl<'t, T> Iterator for NodeListDrain<'t, T> {
 }
 
 impl<'t, T> NodeListDrain<'t, T> {
+    #[inline(always)]
     pub fn remaining_subtrees_size(&self) -> usize {
         self.remaining_nodes.len()
     }
@@ -712,6 +800,7 @@ pub struct NodeDrain<'t, T> {
 }
 
 impl<'t, T> Drop for NodeDrain<'t, T> {
+    #[inline]
     fn drop(&mut self) {
         // read out all values in the slice and drop them
         for node in self.slice.iter_mut() {
@@ -724,6 +813,7 @@ impl<'t, T> Drop for NodeDrain<'t, T> {
 }
 
 impl<'t, T> NodeDrain<'t, T> {
+    #[inline(always)]
     pub fn into_val_and_children(mut self) -> (T, NodeListDrain<'t, T>) {
         // move the slice out of self, so it won't drop the data anymore
         let slice = std::mem::replace(&mut self.slice, &mut []);
@@ -741,20 +831,24 @@ impl<'t, T> NodeDrain<'t, T> {
         }
     }
 
+    #[inline(always)]
     pub fn val(&self) -> &T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &self.slice.get_unchecked(0).val }
     }
 
+    #[inline(always)]
     pub fn val_mut(&mut self) -> &mut T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &mut self.slice.get_unchecked_mut(0).val }
     }
 
+    #[inline(always)]
     pub fn num_descendants_incl_self(&self) -> usize {
         self.slice.len()
     }
 
+    #[inline(always)]
     pub fn num_descendants_excl_self(&self) -> usize {
         self.slice.len() - 1
     }

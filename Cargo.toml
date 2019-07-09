@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 serde = { version = "1.0", optional = true, features = ["derive"] }
+derive_destructure = { version = "1.0", path = "../derive_destructure" }
 
 [dev-dependencies]
 serde = { version = "1.0", optional = false, features = ["derive"] }
