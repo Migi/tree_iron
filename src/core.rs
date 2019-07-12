@@ -1,5 +1,3 @@
-// TODO: NodeRefMut to NodeRef
-// TODO: search for "store", rename.
 // TODO: rename "an"
 // TODO: search all instances of "| mut"
 // TODO: rename "|node|" in examples/tests with "|node_builder|"
@@ -667,26 +665,14 @@ impl<'t, T> Iterator for NodeIterMut<'t, T> {
     type Item = NodeRefMut<'t, T>;
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        self.remaining_nodes
-            .get(0)
-            .map(|cur_node| cur_node.subtree_size)
-            .map(|cur_node_subtree_size| {
-                // TODO: try simplifying
-
-                // move the slice out of self, so we can call split_at_mut without borrowing self.remaining_nodes
-                let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
-
-                // split off the first node and its descendants
-                let (cur_node_slice, next_nodes_slice) =
-                    remaining_nodes.split_at_mut(cur_node_subtree_size.get());
-
-                // update self.remaining_nodes
-                self.remaining_nodes = next_nodes_slice;
-
-                NodeRefMut {
-                    slice: cur_node_slice,
-                }
+        if let Some(cur_node) = self.remaining_nodes.get(0) {
+            let cur_node_subtree_size = cur_node.subtree_size.get();
+            Some(NodeRefMut {
+                slice: unsafe { slice_split_off_first_n_unchecked_mut(&mut self.remaining_nodes, cur_node_subtree_size) }
             })
+        } else {
+            None
+        }
     }
 }
 
@@ -704,13 +690,13 @@ pub struct NodeRefMut<'t, T> {
 impl<'t, T> NodeRefMut<'t, T> {
     #[inline(always)]
     pub fn into_children(self) -> NodeIterMut<'t, T> {
-        let (_, remaining_nodes) = self.slice.split_first_mut().unwrap();
+        let (_, remaining_nodes) = unsafe { slice_split_first_unchecked_mut(self.slice) };
         NodeIterMut { remaining_nodes }
     }
 
     #[inline(always)]
     pub fn children(&mut self) -> NodeIterMut<T> {
-        let (_, remaining_nodes) = self.slice.split_first_mut().unwrap();
+        let (_, remaining_nodes) = unsafe { slice_split_first_unchecked_mut(self.slice) };
         NodeIterMut { remaining_nodes }
     }
 
@@ -734,6 +720,14 @@ impl<'t, T> NodeRefMut<'t, T> {
     #[inline(always)]
     pub fn num_descendants_excl_self(&self) -> usize {
         self.slice.len() - 1
+    }
+}
+
+impl<'t,T> From<NodeRefMut<'t,T>> for NodeRef<'t,T> {
+    fn from(val: NodeRefMut<'t,T>) -> Self {
+        NodeRef {
+            slice: val.slice
+        }
     }
 }
 
@@ -762,24 +756,14 @@ impl<'t, T> Iterator for NodeListDrain<'t, T> {
     type Item = NodeDrain<'t, T>;
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        self.remaining_nodes
-            .get(0)
-            .map(|cur_node| cur_node.subtree_size)
-            .map(|cur_node_subtree_size| {
-                // move the slice out of self, so it won't drop the data anymore
-                let remaining_nodes = std::mem::replace(&mut self.remaining_nodes, &mut []);
-
-                // split off the first node and its descendants
-                let (cur_node_slice, next_nodes_slice) =
-                    remaining_nodes.split_at_mut(cur_node_subtree_size.get());
-
-                // update self.remaining_nodes so we drop them again and for future calls to next()
-                self.remaining_nodes = next_nodes_slice;
-
-                NodeDrain {
-                    slice: cur_node_slice,
-                }
+        if let Some(cur_node) = self.remaining_nodes.get(0) {
+            let cur_node_subtree_size = cur_node.subtree_size.get();
+            Some(NodeDrain {
+                slice: unsafe { slice_split_off_first_n_unchecked_mut(&mut self.remaining_nodes, cur_node_subtree_size) }
             })
+        } else {
+            None
+        }
     }
 }
 
@@ -826,7 +810,7 @@ impl<'t, T> NodeDrain<'t, T> {
             let node_data: NodeData<T> = std::ptr::read(node_data_ref);
 
             // Return the value (the user will drop it)
-            // and the remaining slice as a NodeListDrain, who now owns the values in that slice (and will drop them)
+            // and the remaining slice as a NodeListDrain, which now owns the values in that slice (and will drop them)
             (node_data.val, NodeListDrain { remaining_nodes })
         }
     }

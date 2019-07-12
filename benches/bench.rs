@@ -11,6 +11,7 @@ use rand::distributions::{Distribution, Uniform};
 
 use failure::Fallible;
 use std::hash::{Hash,Hasher};
+use std::time::Duration;
 
 trait NodeCreator : Sized {
     type ValType;
@@ -376,6 +377,55 @@ impl<'a,T> VisitableNode<T> for &'a NaiveNode<T> {
     }
 }
 
+pub struct LLNode<T> {
+    pub value: T,
+    next_sibling: Option<Box<LLNode<T>>>,
+    first_child: Option<Box<LLNode<T>>>
+}
+
+fn create_ll_tree_rec<C: NodeCreator>(creator: &mut C, rng: &mut impl Rng) -> Option<Box<LLNode<C::ValType>>> {
+    let mut first_child = creator.next_child(rng).map(|mut child_creator| {
+        Box::new(LLNode {
+            value: child_creator.val(),
+            next_sibling: None,
+            first_child: create_ll_tree_rec(&mut child_creator, rng)
+        })
+    });
+    if let Some(first_child) = &mut first_child {
+        let mut last_child_next_sibling = &mut first_child.next_sibling;
+        while let Some(mut child_creator) = creator.next_child(rng) {
+            *last_child_next_sibling = Some(Box::new(LLNode {
+                value: child_creator.val(),
+                next_sibling: None,
+                first_child: create_ll_tree_rec(&mut child_creator, rng)
+            }));
+            last_child_next_sibling = &mut last_child_next_sibling.as_mut().unwrap().next_sibling;
+        }
+    }
+    first_child
+}
+
+fn create_ll_tree<C: NodeCreator>(mut creator: C, rng: &mut impl Rng) -> LLNode<C::ValType> {
+    LLNode {
+        value: creator.val(),
+        next_sibling: None,
+        first_child: create_ll_tree_rec(&mut creator, rng)
+    }
+}
+
+impl<'a,T> VisitableNode<T> for &'a LLNode<T> {
+    fn val(&self) -> &T {
+        &self.value
+    }
+    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+        let mut child = &self.first_child;
+        while let Some(the_child) = child {
+            v.visit_node(&**the_child);
+            child = &the_child.next_sibling;
+        }
+    }
+}
+
 pub struct BumpNode<'bump,T> {
     pub value: T,
     children: bumpalo::collections::Vec<'bump, BumpNode<'bump, T>>
@@ -417,7 +467,7 @@ fn make_rng() -> impl Rng {
 }
 
 fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn() -> C, type_name: &'static str) where C::ValType: Hash {
-    c.bench_function(&format!("make_{}_ironed", type_name), move |b| {
+    /*c.bench_function(&format!("make_{}_ironed", type_name), move |b| {
         b.iter(|| {
             create_ironed_tree(creator(), &mut black_box(make_rng()))
         });
@@ -494,14 +544,28 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
             hash_tree(&tree)
         });
     });
-    c.bench_function(&format!("make_{}_bump_tree", type_name), move |b| {
+    c.bench_function(&format!("make_{}_ll_tree", type_name), move |b| {
         b.iter(|| {
-            let bump = bumpalo::Bump::new();
+            create_ll_tree(creator(), &mut black_box(make_rng()))
+        });
+    });
+    c.bench_function(&format!("hash_{}_ll_tree", type_name), move |b| {
+        let tree = create_ll_tree(creator(), &mut black_box(make_rng()));
+        b.iter(|| {
+            hash_tree(&tree)
+        });
+    });*/
+    c.bench_function(&format!("make_{}_bump_tree", type_name), move |b| {
+        let mut bump = bumpalo::Bump::new();
+        b.iter(|| {
+            bump.reset();
             black_box(create_bump_tree(creator(), &mut black_box(make_rng()), &bump));
         });
     });
     c.bench_function(&format!("hash_{}_bump_tree", type_name), move |b| {
-        let bump = bumpalo::Bump::new();
+        let mut bump = bumpalo::Bump::new();
+        let _ = create_bump_tree(creator(), &mut black_box(make_rng()), &bump);
+        bump.reset();
         let tree = create_bump_tree(creator(), &mut black_box(make_rng()), &bump);
         b.iter(|| {
             hash_tree(&tree)
@@ -517,5 +581,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     benchmark_tree_type(c, make_deep_random_tree, "deep_random");
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group!{
+    name = benches;
+    config = Criterion::default()
+        .configure_from_args()
+        .warm_up_time(Duration::new(10, 0))
+        .measurement_time(Duration::new(20, 0));
+    targets = criterion_benchmark
+}
 criterion_main!(benches);
