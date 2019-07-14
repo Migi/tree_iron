@@ -1,19 +1,16 @@
-// TODO: rename "an"
-// TODO: search all instances of "| mut"
-// TODO: rename "|node|" in examples/tests with "|node_builder|"
-// TODO: indexing
-// TODO: return NodeRefMut on creation
-// TODO: check safety of overflow
-// TODO: #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug, Hash)]?
-// TODO: update dep versions
-// TODO: clippy
-// TODO: tests for leaks on panic
-// TODO: Sync/Send on pointer-owning types
-// TODO: #[inline]
-
 // core.rs contains all the unsafe code.
 // It should be kept as small as possible.
 // No bugs outside of core.rs should lead to memory unsafety.
+
+// TODO: indexing
+// TODO: check safety of overflow
+
+// TODO: #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug, Hash)]?
+// TODO: clippy
+// TODO: #[inline]
+// TODO: some more tests?
+// TODO: update dep versions
+
 use std::iter::Iterator;
 use std::num::NonZeroUsize;
 
@@ -65,28 +62,28 @@ unsafe fn slice_split_first_unchecked_mut<T>(slice: &mut [T]) -> (&mut T,&mut [T
     (slice.get_unchecked_mut(0),std::slice::from_raw_parts_mut(ptr.add(1), len - 1))
 }
 
-/// An `IronedForest` is a list of trees, all stored in a single `Vec` with only 1 `usize` overhead per node.
+/// A `PackedForest` is a list of trees, all stored in a single `Vec` with only 1 `usize` overhead per node.
 /// This allows for fast and cache-friendly iteration (in pre-order or depth-first order) and efficient storage of the trees.
 ///
-/// As opposed to [`IronedTree`], where you can never modify the structure once it's created,
-/// you can add trees to an [`IronedForest`] after it's created (but you can't modify their structure).
+/// As opposed to [`PackedTree`](crate::PackedTree), where you can never modify the structure once it's created,
+/// you can add trees to a [`PackedForest`] after it's created (but you can't modify their structure).
 ///
 /// # Example
 /// ```
-/// use tree_iron::{IronedForest, NodeRef};
+/// use packed_tree::{PackedForest, NodeRef};
 ///
 /// // Create the forest
-/// let mut forest = IronedForest::new();
+/// let mut forest = PackedForest::new();
 ///
 /// // Add two trees
-/// forest.build_tree("node 1", |mut node| {
-/// 	node.add_child("node 1.1");
-/// 	node.build_child("node 1.2", |mut node| {
-/// 		node.add_child("node 1.2.1");
+/// forest.build_tree("node 1", |node_builder| {
+/// 	node_builder.add_child("node 1.1");
+/// 	node_builder.build_child("node 1.2", |node_builder| {
+/// 		node_builder.add_child("node 1.2.1");
 /// 	});
 /// });
-/// forest.build_tree("node 2", |mut node| {
-///     node.add_child("node 2.1");
+/// forest.build_tree("node 2", |node_builder| {
+///     node_builder.add_child("node 2.1");
 /// });
 ///
 /// // Iterate it, counting the number of nodes
@@ -110,112 +107,67 @@ unsafe fn slice_split_first_unchecked_mut<T>(slice: &mut [T]) -> (&mut T,&mut [T
 ///
 // =============== IMPLEMENTATION SAFETY NOTES ===================
 //
-// TODO
-#[derive(Default)]
-pub struct IronedForest<T> {
+// A PackedForest consists of a Vec of the nodes of the forest, stored in "pre-order" order,
+// i.e., the order you would encounter the nodes in a depth-first search, where you visit
+// all of the nodes in the first tree, then all those in the next tree, etc.
+//
+// Each node also stores one extra usize `subtree_size`, which is the number of descendants
+// of that node, including itself. That is enough to encode the structure of the trees.
+// The `subtree_size`s of nodes inside the `len` of the `Vec` owned by this `PackedForest`
+// must at all times be correct and form a valid forest.
+//
+// There are 2 cases where there may be extra data outside the `len` of this `Vec`:
+//
+// Adding trees (and nodes) to the forest happens through the method `get_tree_builder`,
+// which gives back a `NodeBuilder` that borrows the `PackedForest` mutably.
+// While the `PackedForest` is borrowed mutably by the `NodeBuilder`, data may be written
+// to the `Vec` past the `len` of the `Vec` (but inside its `capacity`).
+// See `NodeBuilder`'s comments for more details on that.
+//
+// The tree may also be drained using `drain_trees`. In that case, the `len` of the `Vec`
+// is set to 0, but a `NodeListDrain` is returned that borrows the forest mutably, which
+// can read, move data out of, and drop nodes that used to be inside the `len` of the `Vec`.
+// See `NodeDrain` and `NodeListDrain`'s comments for more details.
+#[derive(Default, Eq, PartialEq, Hash, Clone)]
+pub struct PackedForest<T> {
     data: Vec<NodeData<T>>,
 }
 
-impl<T> IronedForest<T> {
-    /// Create a new [`IronedForest`].
+impl<T> PackedForest<T> {
+    /// Create a new, empty [`PackedForest`].
+    /// 
+    /// Note that [`PackedForest`] implements [`Default`].
     #[inline(always)]
-    pub fn new() -> IronedForest<T> {
-        IronedForest {
+    pub fn new() -> PackedForest<T> {
+        PackedForest {
             data: Vec::new(),
         }
     }
 
-    /// Create a new [`IronedForest`] with the specified capacity for the inner `Vec` which stores the nodes (see [`Vec::with_capacity`]).
+    /// Create a new [`PackedForest`] with the specified capacity for the inner `Vec` which stores the nodes (see [`Vec::with_capacity`]).
     #[inline(always)]
-    pub fn with_capacity(capacity: usize) -> IronedForest<T> {
-        IronedForest {
+    pub fn with_capacity(capacity: usize) -> PackedForest<T> {
+        PackedForest {
             data: Vec::with_capacity(capacity),
         }
     }
 
-    /// Build a tree with the given root value, and add it to the forest.
-    /// 
-    /// The parameter `root_val` is the value that the root of the tree will have.
-    /// 
-    /// The parameter `node_builder_cb` is a callback function that is called exactly once. It is passed a `[NodeBuilder]` that can be
-    /// used to add nodes to the root node. The value returned by `node_builder_cb` becomes the return value of this function.
-    /// 
-    /// For complex use cases where callbacks can get in the way, [`get_tree_builder`](`IronedForest::get_tree_builder`) may be more ergonomic.
-    #[inline]
-    pub fn build_tree<R>(
-        &mut self,
-        root_val: T,
-        node_builder_cb: impl FnOnce(&mut NodeBuilder<T>) -> R,
-    ) -> R {
-        let mut builder = self.get_tree_builder();
-        let ret = node_builder_cb(&mut builder);
-        builder.finish(root_val);
-        ret
-    }
-
-    /// Build a tree, where values of nodes come from return values of the given closure, and add it to the forest.
-    /// 
-    /// The parameter `node_builder_cb` is a callback function that is called exactly once. It is passed a [`NodeBuilder`] that can be
-    /// used to add nodes to the root node. The value returned by `node_builder_cb` becomes the return value of this function.
-    /// 
-    /// For complex use cases where callbacks can get in the way, [`get_tree_builder`](`IronedForest::get_tree_builder`) may be more ergonomic.
-    #[inline]
-    pub fn build_tree_by_ret_val(
-        &mut self,
-        node_builder_cb: impl FnOnce(&mut NodeBuilder<T>) -> T,
-    ) {
-        let mut builder = self.get_tree_builder();
-        let root_val = node_builder_cb(&mut builder);
-        builder.finish(root_val);
-    }
-
-    /// Add a tree with only a single node to the forest. The parameter `val` is the value of that single node.
-    #[inline]
-    pub fn add_single_node_tree(&mut self, val: T) {
-        self.get_tree_builder().finish(val);
-    }
-
     /// Get a [`NodeBuilder`] that can be used to build a tree that will be added to this forest.
     /// 
-    /// The [`NodeBuilder`] borrows the forest mutably, so you can't do anything with the forest until you're
-    /// done building the tree.
+    /// After adding nodes to the tree, you must call [`finish`](`NodeBuilder::finish`) on the
+    /// [`NodeBuilder`] with the value that the root of the tree will have. Simply dropping the
+    /// [`NodeBuilder`] without calling [`finish`](`NodeBuilder::finish`) will result in no
+    /// nodes being added to the tree.
     /// 
-    /// For simple use cases, using [`build_tree`](`IronedForest::build_tree`) is probably more ergonomic.
+    /// **WARNING:** Leaking the returned [`NodeBuilder`] (i.e. through [`std::mem::forget`])
+    /// after adding child nodes to it leaks the values of those node (their `drop` method
+    /// won't be called). Leaking is considered "safe" in Rust, so this function is safe,
+    /// but you still probably want to avoid doing that.
     /// 
-    /// # Example:
-    /// ```
-    /// use tree_iron::{IronedTree, NodeRef, NodeBuilder};
+    /// For most use cases, using [`build_tree`](`PackedForest::build_tree`) or
+    /// [`build_tree_by_ret_val`](`PackedForest::build_tree_by_ret_val`) is probably more ergonomic.
     /// 
-    /// // Assume you already have some kind of tree with floating point values, like this:
-    /// let value_tree = IronedTree::new(1.2, |node| {
-    ///     node.build_child(3.4, |node| {
-    ///         node.add_child(5.6);
-    ///     });
-    ///     node.add_child(7.8);
-    /// });
-    /// 
-    /// // Build a tree from the previous tree,
-    /// // where the value of a node is the sum of the values
-    /// // of all the values of all the nodes below it (including itself).
-    /// // Returns that sum.
-    /// fn process_node(value_node: NodeRef<f64>, sum_node_builder: &mut NodeBuilder<f64>) -> f64 {
-    ///     let mut sum = *value_node.val();
-    ///     for value_child in value_node.children() {
-    ///         let mut sum_child_builder = sum_node_builder.get_child_builder();
-    ///         let child_sum = process_node(value_child, &mut sum_child_builder);
-    ///         sum += child_sum;
-    ///         sum_child_builder.finish(child_sum);
-    ///     }
-    ///     sum
-    /// }
-    /// 
-    /// let sum_tree = IronedTree::new(0., |node_builder| {
-    ///     let sum = process_node(value_tree.root(), node_builder);
-    ///     // TODO
-    /// });
-    /// 
-    /// assert_eq!(*sum_tree.root().val(), 1.2+3.4+5.6+7.8);
-    /// ```
+    /// See [`NodeBuilder::get_child_builder`] for an example.
     #[inline]
     pub fn get_tree_builder(&mut self) -> NodeBuilder<T> {
         // NodeBuilder's invariants (see comments at structure definition of NodeBuilder):
@@ -255,8 +207,8 @@ impl<T> IronedForest<T> {
     /// 
     /// **WARNING:** if the [`NodeListDrain`] returned by this function is leaked (i.e. through [`std::mem::forget`])
     /// without iterating over all the values in it, then the values of the nodes that were not iterated over
-    /// will also be leaked. Leaking is considered "safe" in Rust, so this function is safe,
-    /// but you still probably want to avoid doing that.
+    /// will also be leaked (their `drop` method won't be called). Leaking is considered "safe" in Rust,
+    /// so this function is safe, but you still probably want to avoid doing that.
     #[inline(always)]
     pub fn drain_trees(&mut self) -> NodeListDrain<'_, T> {
         // first, get the current length of the data vector.
@@ -279,7 +231,7 @@ impl<T> IronedForest<T> {
             // This NodeListDrain will read all the data out of the slice as the user
             // iterates over it, and when the NodeListDrain gets dropped,
             // it drops whatever data wasn't iterated over yet.
-            // NOTE: NodeListDrain mutably borrows this IronedForest, so no changes
+            // NOTE: NodeListDrain mutably borrows this PackedForest, so no changes
             // to the vector can happen while the NodeListDrain exists.
             NodeListDrain {
                 remaining_nodes: mut_slice,
@@ -287,6 +239,12 @@ impl<T> IronedForest<T> {
         }
     }
 
+    /// Get a [`NodeRef`] to the node with the given index, or `None` if the index is out of bounds.
+    /// 
+    /// Nodes are indexed in pre-order ordering, i.e., in the order you would encounter
+    /// them in a depth-first search. So the index of the first tree's root node is 0,
+    /// the index of its first child (if any) is 1, the index of that first child's
+    /// first child (if any) is 2, etc.
     #[inline(always)]
     pub fn get(&self, index: usize) -> Option<NodeRef<T>> {
         if index < self.data.len() {
@@ -296,6 +254,12 @@ impl<T> IronedForest<T> {
         }
     }
 
+    /// Get a [`NodeRefMut`] to the node with the given index, or `None` if the index is out of bounds.
+    /// 
+    /// Nodes are indexed in pre-order ordering, i.e., in the order you would encounter
+    /// them in a depth-first search. So the index of the first tree's root node is 0,
+    /// the index of its first child (if any) is 1, the index of that first child's
+    /// first child (if any) is 2, etc.
     #[inline(always)]
     pub fn get_mut(&mut self, index: usize) -> Option<NodeRefMut<T>> {
         if index < self.data.len() {
@@ -305,6 +269,9 @@ impl<T> IronedForest<T> {
         }
     }
 
+    /// Get a [`NodeRef`] to the node with the given index.
+    /// 
+    /// Does **not** check that the given index is in bounds, and is therefore unsafe.
     #[inline(always)]
     pub unsafe fn get_unchecked(&self, index: usize) -> NodeRef<T> {
         let subtree_size = self.data.get_unchecked(index).subtree_size.get();
@@ -313,6 +280,9 @@ impl<T> IronedForest<T> {
         }
     }
 
+    /// Get a [`NodeRefMut`] to the node with the given index.
+    /// 
+    /// Does **not** check that the given index is in bounds, and is therefore unsafe.
     #[inline(always)]
     pub unsafe fn get_unchecked_mut(&mut self, index: usize) -> NodeRefMut<T> {
         let subtree_size = self.data.get_unchecked(index).subtree_size.get();
@@ -321,6 +291,7 @@ impl<T> IronedForest<T> {
         }
     }
 
+    /// Remove all nodes from the forest.
     #[inline]
     pub fn clear(&mut self) {
         self.data.clear()
@@ -328,20 +299,20 @@ impl<T> IronedForest<T> {
 
     /// Iterate over all the values in all the nodes of all the trees in this forest, in pre-order order.
     #[inline(always)]
-    pub fn iter_flattened<'a>(
-        &'a self,
-    ) -> std::iter::Map<std::slice::Iter<'a, NodeData<T>>, impl FnMut(&'a NodeData<T>) -> &'a T>
+    pub fn iter_flattened<'t>(
+        &'t self,
+    ) -> std::iter::Map<std::slice::Iter<'t, NodeData<T>>, impl FnMut(&'t NodeData<T>) -> &'t T>
     {
         self.data.iter().map(|node_data| &node_data.val)
     }
 
     /// Iterate mutably over all the values in all the nodes of all the trees in this forest, in pre-order order.
     #[inline(always)]
-    pub fn iter_flattened_mut<'a>(
-        &'a mut self,
+    pub fn iter_flattened_mut<'t>(
+        &'t mut self,
     ) -> std::iter::Map<
-        std::slice::IterMut<'a, NodeData<T>>,
-        impl FnMut(&'a mut NodeData<T>) -> &'a mut T,
+        std::slice::IterMut<'t, NodeData<T>>,
+        impl FnMut(&'t mut NodeData<T>) -> &'t mut T,
     > {
         self.data.iter_mut().map(|node_data| &mut node_data.val)
     }
@@ -357,7 +328,7 @@ impl<T> IronedForest<T> {
         self.data.drain(..).map(|node_data| node_data.val)
     }
 
-    /// Returns a read-only view over the raw data stored internally by this `IronedForest`.
+    /// Returns a read-only view over the raw data stored internally by this `PackedForest`.
     /// This is not really recommended to be used except for very advanced use cases.
     #[inline(always)]
     pub fn raw_data(&self) -> &Vec<NodeData<T>> {
@@ -371,12 +342,13 @@ impl<T> IronedForest<T> {
     }
 }
 
-/// `NodeData<T>` is the data that an [`IronedForest`] or [`IronedTree`] internally stores per node:
+/// `NodeData<T>` is the data that a [`PackedForest`] or [`PackedTree`](crate::PackedTree) internally stores per node:
 /// the data `T` and a `usize` indicating the number of nodes in the subtree that has this node as root.
 ///
 /// This type is not really intended to be used directly if you're a user of this library,
 /// but it is nevertheless exposed if there is a reason you want to access it
-/// (see e.g. [`IronedForest::raw_data`] and [`IronedTree::raw_data`])
+/// (see e.g. [`PackedForest::raw_data`] and [`PackedTree::raw_data`](crate::PackedTree::raw_data))
+#[derive(Eq, PartialEq, Hash, Copy, Clone, Debug)]
 pub struct NodeData<T> {
     val: T,
     subtree_size: NonZeroUsize,
@@ -397,9 +369,9 @@ impl<T> NodeData<T> {
 }
 
 /// `NodeBuilder` is a struct that lets you add children to a node that is currently being added
-/// to an [`IronedTree`] or an [`IronedForest`].
+/// to a [`PackedTree`](crate::PackedTree) or a [`PackedForest`].
 /// 
-/// See [`IronedTree::new`], [`IronedForest::build_tree`], [`IronedForest::get_tree_builder`], etc.
+/// See [`PackedTree::new`](crate::PackedTree::new), [`PackedForest::build_tree`], [`PackedForest::get_tree_builder`], etc.
 /// 
 // IMPLEMENTATION NOTES:
 // The fields of the struct are:
@@ -416,7 +388,7 @@ impl<T> NodeData<T> {
 //    otherwise index must be equal to forest.data.len().
 #[derive(destructure)]
 pub struct NodeBuilder<'a, T> {
-    forest: &'a mut IronedForest<T>,
+    forest: &'a mut PackedForest<T>,
     index: usize,
     subtree_size: NonZeroUsize,
     parent_subtree_size: Option<&'a mut NonZeroUsize>,
@@ -446,24 +418,66 @@ impl<'a, T> Drop for NodeBuilder<'a, T> {
 }
 
 impl<'a, T> NodeBuilder<'a, T> {
-    /// test
-    #[inline]
-    pub fn build_child<R>(
-        &mut self,
-        root_val: T,
-        child_builder_cb: impl FnOnce(&mut NodeBuilder<T>) -> R,
-    ) -> R {
-        let mut builder = self.get_child_builder();
-        let ret = child_builder_cb(&mut builder);
-        builder.finish(root_val);
-        ret
+    /// Returns the index of the node that is being built.
+    /// 
+    /// See also [`PackedForest::get`] and [`PackedForest::get_mut`].
+    pub fn index(&self) -> usize {
+        self.index
     }
 
-    #[inline]
-    pub fn add_child(&mut self, val: T) {
-        self.get_child_builder().finish(val);
-    }
-
+    /// Get a [`NodeBuilder`] to build a node that will become a child of the node
+    /// currently being built by this [`NodeBuilder`].
+    /// 
+    /// You must call [`finish`](`NodeBuilder::finish`) on the returned [`NodeBuilder`]
+    /// with the value that the child node will have. Simply dropping the [`NodeBuilder`]
+    /// without calling [`finish`](`NodeBuilder::finish`) results in no nodes being added.
+    /// 
+    /// **WARNING:** Leaking the returned [`NodeBuilder`] (i.e. through [`std::mem::forget`])
+    /// after adding child nodes to it leaks the values of those node (their `drop` method
+    /// won't be called). Leaking is considered "safe" in Rust, so this function is safe,
+    /// but you still probably want to avoid doing that.
+    /// 
+    /// For most use cases, using [`build_tree`](`PackedForest::build_tree`) or
+    /// [`build_tree_by_ret_val`](`PackedForest::build_tree_by_ret_val`) is probably more ergonomic.
+    /// 
+    /// # Example:
+    /// ```
+    /// use packed_tree::{PackedTree, PackedForest, NodeRef, NodeRefMut, NodeBuilder};
+    /// use std::convert::TryFrom;
+    /// 
+    /// // Assume you already have some kind of tree with floating point values, like this:
+    /// let value_tree = PackedTree::new(1.2, |node_builder| {
+    ///     node_builder.build_child(3.4, |node_builder| {
+    ///         node_builder.add_child(5.6);
+    ///     });
+    ///     node_builder.add_child(7.8);
+    /// });
+    /// 
+    /// // Build a tree from the previous tree,
+    /// // where the value of a node is the sum of the values
+    /// // of all the values of all the nodes below it (including itself).
+    /// // Returns a NodeRefMut to the new node in the sum tree.
+    /// fn process_node<'t>(
+    ///     value_node: NodeRef<f64>,
+    ///     mut sum_node_builder: NodeBuilder<'t,f64>
+    /// ) -> NodeRefMut<'t,f64> {
+    ///     let mut sum = *value_node.val();
+    ///     for value_child in value_node.children() {
+    ///         let sum_child_builder = sum_node_builder.get_child_builder();
+    ///         let sum_child_node_ref = process_node(value_child, sum_child_builder);
+    ///         sum += *sum_child_node_ref.val();
+    ///     }
+    ///     sum_node_builder.finish(sum)
+    /// }
+    /// 
+    /// let mut sum_forest = PackedForest::new();
+    /// let root_builder = sum_forest.get_tree_builder();
+    /// process_node(value_tree.root(), root_builder);
+    /// 
+    /// let sum_tree = PackedTree::try_from(sum_forest).unwrap();
+    /// 
+    /// assert_eq!(*sum_tree.root().val(), 1.2+3.4+5.6+7.8);
+    /// ```
     #[inline]
     pub fn get_child_builder<'b>(&'b mut self) -> NodeBuilder<'b, T> {
         // Invariant 1 is satisfied because the child's NodeBuilder's subtree_size is 1,
@@ -477,6 +491,23 @@ impl<'a, T> NodeBuilder<'a, T> {
         }
     }
 
+    /// Finish building the node that this [`NodeBuilder`] was building, giving it its value
+    /// and adding its nodes to the tree, forest or the parent [`NodeBuilder`].
+    /// Returns a [`NodeRefMut`] to the node that was added.
+    /// 
+    /// This method doesn't need to be (and in fact can't be) called when adding nodes through
+    /// methods like [`build_child`](NodeBuilder::build_child) or
+    /// [`build_child_by_ret_val`](NodeBuilder::build_child_by_ret_val).
+    /// It is called automatically. It only needs to be called if the [`NodeBuilder`]
+    /// was obtained through methods like [`get_child_builder`](NodeBuilder::get_child_builder) or
+    /// [`PackedForest::get_tree_builder`].
+    /// 
+    /// Dropping a [`NodeBuilder`] without calling `finish` drops all the nodes that have been
+    /// added to it without adding them to the tree or forest. Leaking a [`NodeBuilder`]
+    /// (i.e. through [`std::mem::forget`]) causes all the nodes added to it to be leaked instead
+    /// (their `drop` method won't be called).
+    /// 
+    /// See [`get_child_builder`](NodeBuilder::get_child_builder) for an example of how to use this.
     #[inline]
     pub fn finish(self, val: T) -> NodeRefMut<'a,T> {
         unsafe {
@@ -583,7 +614,10 @@ impl<'a, T> NodeBuilder<'a, T> {
     }
 }
 
-/// test
+/// Iterates a list of nodes in a [`PackedForest`] or [`PackedTree`], usually the list
+/// of children of a node, or the list of root nodes in a [`PackedForest`].
+/// 
+/// See e.g. [`PackedForest::iter_trees`] and [`NodeRef::children`].
 #[derive(Copy)]
 pub struct NodeIter<'t, T> {
     remaining_nodes: &'t [NodeData<T>], // contains (only) the nodes in the iterator and all their descendants
@@ -599,8 +633,9 @@ impl<'t, T> Clone for NodeIter<'t, T> {
 }
 
 impl<'t, T> NodeIter<'t, T> {
+    /// Returns the number of nodes (also counting all descendants) remaining in this iterator in O(1) time.
     #[inline(always)]
-    pub fn remaining_subtrees_size(&self) -> usize {
+    pub fn num_remaining_nodes_incl_descendants(&self) -> usize {
         self.remaining_nodes.len()
     }
 }
@@ -617,7 +652,7 @@ impl<'t, T> Iterator for NodeIter<'t, T> {
     }
 }
 
-/// test
+/// A shared reference to a node in a [`PackedForest`] or [`PackedTree`].
 pub struct NodeRef<'t, T> {
     slice: &'t [NodeData<T>], // contains (only) the current node and all its descendants
 }
@@ -634,29 +669,34 @@ impl<'t,T> Clone for NodeRef<'t,T> {
 }
 
 impl<'t, T> NodeRef<'t, T> {
+    /// Returns an iterator to the children of this node.
     #[inline(always)]
     pub fn children(&self) -> NodeIter<'t, T> {
         let (_, remaining_nodes) = unsafe { slice_split_first_unchecked(self.slice) };
         NodeIter { remaining_nodes }
     }
 
+    /// Returns a reference to the value of this node.
     #[inline(always)]
     pub fn val(&self) -> &T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &self.slice.get_unchecked(0).val }
     }
 
+    /// Counts the number of descendants of this node (also counting the node itself) in O(1) time.
     #[inline(always)]
     pub fn num_descendants_incl_self(&self) -> usize {
         self.slice.len()
     }
 
+    /// Counts the number of descendants of this node (not counting the node itself) in O(1) time.
     #[inline(always)]
     pub fn num_descendants_excl_self(&self) -> usize {
         self.slice.len() - 1
     }
 }
 
+/// A mutable reference to a node in a [`PackedForest`] or [`PackedTree`].
 pub struct NodeIterMut<'t, T> {
     remaining_nodes: &'t mut [NodeData<T>], // contains (only) the nodes in the iterator and all their descendants
 }
@@ -677,9 +717,26 @@ impl<'t, T> Iterator for NodeIterMut<'t, T> {
 }
 
 impl<'t, T> NodeIterMut<'t, T> {
+    /// Reborrow this [`NodeIterMut`] as a [`NodeIter`].
     #[inline(always)]
-    pub fn remaining_subtrees_size(&self) -> usize {
+    pub fn reborrow_shared(&self) -> NodeIter<T> {
+        NodeIter {
+            remaining_nodes: &self.remaining_nodes
+        }
+    }
+
+    /// Returns the number of nodes (also counting all descendants) remaining in this iterator in O(1) time.
+    #[inline(always)]
+    pub fn num_remaining_nodes_incl_descendants(&self) -> usize {
         self.remaining_nodes.len()
+    }
+}
+
+impl<'t,T> From<NodeIterMut<'t,T>> for NodeIter<'t,T> {
+    fn from(val: NodeIterMut<'t,T>) -> Self {
+        NodeIter {
+            remaining_nodes: val.remaining_nodes
+        }
     }
 }
 
@@ -688,35 +745,56 @@ pub struct NodeRefMut<'t, T> {
 }
 
 impl<'t, T> NodeRefMut<'t, T> {
+    /// Returns an iterator to the children of this node.
+    /// 
+    /// The difference between this and [`NodeRefMut::children`] is that this method
+    /// consumes self and is therefore able to return a broader lifetime.
     #[inline(always)]
     pub fn into_children(self) -> NodeIterMut<'t, T> {
         let (_, remaining_nodes) = unsafe { slice_split_first_unchecked_mut(self.slice) };
         NodeIterMut { remaining_nodes }
     }
 
+    /// Returns an iterator to the children of this node.
+    /// 
+    /// The difference between this and [`NodeRefMut::into_children`] is that this method
+    /// reborrows self, so the lifetime of the returned iterator is that of the
+    /// mutable reference passed to this function.
     #[inline(always)]
     pub fn children(&mut self) -> NodeIterMut<T> {
         let (_, remaining_nodes) = unsafe { slice_split_first_unchecked_mut(self.slice) };
         NodeIterMut { remaining_nodes }
     }
 
+    /// Returns a shared reference to the value of this node.
     #[inline(always)]
     pub fn val(&self) -> &T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &self.slice.get_unchecked(0).val }
     }
 
+    /// Returns a mutable reference to the value of this node.
     #[inline(always)]
     pub fn val_mut(&mut self) -> &mut T {
         debug_assert!(self.slice.len() > 0);
         unsafe { &mut self.slice.get_unchecked_mut(0).val }
     }
 
+    /// Reborrow this [`NodeRefMut`] as a [`NodeRef`].
+    #[inline(always)]
+    pub fn reborrow_shared(&self) -> NodeRef<T> {
+        NodeRef {
+            slice: &self.slice
+        }
+    }
+
+    /// Counts the number of descendants of this node (also counting the node itself) in O(1) time.
     #[inline(always)]
     pub fn num_descendants_incl_self(&self) -> usize {
         self.slice.len()
     }
 
+    /// Counts the number of descendants of this node (not counting the node itself) in O(1) time.
     #[inline(always)]
     pub fn num_descendants_excl_self(&self) -> usize {
         self.slice.len() - 1
@@ -731,6 +809,13 @@ impl<'t,T> From<NodeRefMut<'t,T>> for NodeRef<'t,T> {
     }
 }
 
+/// A draining iterator of a list of nodes in a [`PackedForest`] or [`PackedTree`].
+/// 
+/// When this iterator is dropped, the nodes remaining in the iterator will be dropped.
+/// If this iterator is leaked instead (through e.g. [`std::mem::forget`]),
+/// these nodes also will be leaked instead.
+/// 
+/// See [`PackedForest::drain_trees`] and [`PackedTree::drain`].
 pub struct NodeListDrain<'t, T> {
     // `remaining_nodes` is a slice containing (only) the remaining nodes in the iterator and all their descendants.
     // Normally slices don't own data, but not in this case.
@@ -768,12 +853,19 @@ impl<'t, T> Iterator for NodeListDrain<'t, T> {
 }
 
 impl<'t, T> NodeListDrain<'t, T> {
+    /// Returns the number of nodes (also counting all descendants) remaining in this iterator in O(1) time.
     #[inline(always)]
-    pub fn remaining_subtrees_size(&self) -> usize {
+    pub fn num_remaining_nodes_incl_descendants(&self) -> usize {
         self.remaining_nodes.len()
     }
 }
 
+/// A reference to a node in a [`PackedForest`] or [`PackedTree`] that is being drained.
+/// 
+/// When this [`NodeDrain`] is dropped, the node and all its descendants will be dropped.
+/// If it is leaked instead (through e.g. [`std::mem::forget`]), these nodes also will be leaked instead.
+/// 
+/// See [`PackedForest::drain_trees`] and [`PackedTree::drain`].
 pub struct NodeDrain<'t, T> {
     // `remaining_nodes` is a slice containing (only) the current node (i.e., the first node in the slice) and all its descendants.
     // Normally slices don't own data, but not in this case.
@@ -797,6 +889,7 @@ impl<'t, T> Drop for NodeDrain<'t, T> {
 }
 
 impl<'t, T> NodeDrain<'t, T> {
+    /// Split this [`NodeDrain`] into a pair of the value of the node and an iterator of its children.
     #[inline(always)]
     pub fn into_val_and_children(mut self) -> (T, NodeListDrain<'t, T>) {
         // move the slice out of self, so it won't drop the data anymore

@@ -4,7 +4,7 @@ extern crate criterion;
 use criterion::Criterion;
 use criterion::black_box;
 
-use tree_iron::{IronedTree, NodeBuilder};
+use packed_tree::{PackedTree, NodeBuilder};
 
 use rand::{Rng, SeedableRng};
 use rand::distributions::{Distribution, Uniform};
@@ -189,21 +189,21 @@ fn hash_tree<T:Hash>(root: impl VisitableNode<T>) -> u64 {
 
 // ================ Here begin the implementations of the libraries
 
-fn create_ironed_tree_rec<C: NodeCreator>(creator: &mut C, rng: &mut impl Rng, ironed_node_creator: &mut NodeBuilder<C::ValType>) {
+fn create_packed_tree_rec<C: NodeCreator>(creator: &mut C, rng: &mut impl Rng, packed_node_creator: &mut NodeBuilder<C::ValType>) {
     while let Some(mut child_creator) = creator.next_child(rng) {
-        ironed_node_creator.build_child(child_creator.val(), |child_ironed_node_creator| {
-            create_ironed_tree_rec(&mut child_creator, rng, child_ironed_node_creator);
+        packed_node_creator.build_child(child_creator.val(), |child_packed_node_creator| {
+            create_packed_tree_rec(&mut child_creator, rng, child_packed_node_creator);
         });
     }
 }
 
-fn create_ironed_tree<C: NodeCreator>(mut creator: C, rng: &mut impl Rng) -> IronedTree<C::ValType> {
-    IronedTree::new(creator.val(), |ironed_node_creator| {
-        create_ironed_tree_rec(&mut creator, rng, ironed_node_creator);
+fn create_packed_tree<C: NodeCreator>(mut creator: C, rng: &mut impl Rng) -> PackedTree<C::ValType> {
+    PackedTree::new(creator.val(), |packed_node_creator| {
+        create_packed_tree_rec(&mut creator, rng, packed_node_creator);
     })
 }
 
-impl<'a,T> VisitableNode<T> for tree_iron::NodeRef<'a,T> {
+impl<'a,T> VisitableNode<T> for packed_tree::NodeRef<'a,T> {
     fn val(&self) -> &T {
         self.val()
     }
@@ -467,13 +467,13 @@ fn make_rng() -> impl Rng {
 }
 
 fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn() -> C, type_name: &'static str) where C::ValType: Hash {
-    /*c.bench_function(&format!("make_{}_ironed", type_name), move |b| {
+    c.bench_function(&format!("make_{}_packed", type_name), move |b| {
         b.iter(|| {
-            create_ironed_tree(creator(), &mut black_box(make_rng()))
+            create_packed_tree(creator(), &mut black_box(make_rng()))
         });
     });
-    c.bench_function(&format!("hash_{}_ironed", type_name), move |b| {
-        let tree = create_ironed_tree(creator(), &mut black_box(make_rng()));
+    c.bench_function(&format!("hash_{}_packed", type_name), move |b| {
+        let tree = create_packed_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
             hash_tree(tree.root())
         });
@@ -554,7 +554,7 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
         b.iter(|| {
             hash_tree(&tree)
         });
-    });*/
+    });
     c.bench_function(&format!("make_{}_bump_tree", type_name), move |b| {
         let mut bump = bumpalo::Bump::new();
         b.iter(|| {

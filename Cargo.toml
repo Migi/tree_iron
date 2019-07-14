@@ -1,5 +1,5 @@
 [package]
-name = "tree_iron"
+name = "packed_tree"
 version = "0.1.0"
 authors = ["Michiel De Muynck <michieldemuynck@gmail.com>"]
 edition = "2018"

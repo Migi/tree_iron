@@ -220,38 +220,38 @@ mod tests {
      *
      * The sum of the values of all the nodes in this forest is 323.
      */
-    fn build_store(test: Arc<CheckedTest>) -> IronedForest<Checked<i32>> {
-        let mut store = IronedForest::new();
-        store.build_tree(Checked::new(2, test.clone()), |node| {
-            node.build_child(Checked::new(10, test.clone()), |node| {
-                node.add_child(Checked::new(11, test.clone()));
-                node.add_child(Checked::new(12, test.clone()));
-                node.add_child(Checked::new(13, test.clone()));
+    fn build_store(test: Arc<CheckedTest>) -> PackedForest<Checked<i32>> {
+        let mut store = PackedForest::new();
+        store.build_tree(Checked::new(2, test.clone()), |node_builder| {
+            node_builder.build_child(Checked::new(10, test.clone()), |node_builder| {
+                node_builder.add_child(Checked::new(11, test.clone()));
+                node_builder.add_child(Checked::new(12, test.clone()));
+                node_builder.add_child(Checked::new(13, test.clone()));
             });
-            node.add_child(Checked::new(20, test.clone()));
-            node.build_child(Checked::new(30, test.clone()), |node| {
-                node.add_child(Checked::new(31, test.clone()));
-                node.add_child(Checked::new(32, test.clone()));
-                node.add_child(Checked::new(33, test.clone()));
+            node_builder.add_child(Checked::new(20, test.clone()));
+            node_builder.build_child(Checked::new(30, test.clone()), |node_builder| {
+                node_builder.add_child(Checked::new(31, test.clone()));
+                node_builder.add_child(Checked::new(32, test.clone()));
+                node_builder.add_child(Checked::new(33, test.clone()));
             });
         });
-        store.build_tree(Checked::new(3, test.clone()), |node| {
-            node.add_child(Checked::new(10, test.clone()));
-            node.build_child(Checked::new(20, test.clone()), |node| {
-                node.add_child(Checked::new(21, test.clone()));
-                node.add_child(Checked::new(22, test.clone()));
-                node.add_child(Checked::new(23, test.clone()));
+        store.build_tree(Checked::new(3, test.clone()), |node_builder| {
+            node_builder.add_child(Checked::new(10, test.clone()));
+            node_builder.build_child(Checked::new(20, test.clone()), |node_builder| {
+                node_builder.add_child(Checked::new(21, test.clone()));
+                node_builder.add_child(Checked::new(22, test.clone()));
+                node_builder.add_child(Checked::new(23, test.clone()));
             });
-            node.add_child(Checked::new(30, test.clone()));
+            node_builder.add_child(Checked::new(30, test.clone()));
         });
         store
     }
 
-    fn count_flattened(forest: &IronedForest<Checked<i32>>) -> i32 {
+    fn count_flattened(forest: &PackedForest<Checked<i32>>) -> i32 {
         forest.iter_flattened().map(|v| v.val).sum()
     }
 
-    fn count(forest: &IronedForest<Checked<i32>>) -> i32 {
+    fn count(forest: &PackedForest<Checked<i32>>) -> i32 {
         forest.iter_trees().map(|tree| count_rec(tree)).sum()
     }
 
@@ -735,6 +735,39 @@ mod tests {
                 assert!(children.next().is_none());
             }
             assert!(iter.next().is_none());
+        }
+        assert_eq!(test.num_undropped(), 0);
+    }
+
+    #[test]
+    fn test_panic() {
+        let test = Arc::new(CheckedTest::new());
+        {
+            let mut store = PackedForest::new();
+            let ret_val = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                store.build_tree(Checked::new(1, test.clone()), |node_builder| {
+                    node_builder.build_child(Checked::new(10, test.clone()), |node_builder| {
+                        node_builder.add_child(Checked::new(11, test.clone()));
+                        node_builder.add_child(Checked::new(12, test.clone()));
+                        node_builder.add_child(Checked::new(13, test.clone()));
+                    });
+                });
+                store.build_tree(Checked::new(2, test.clone()), |node_builder| {
+                    node_builder.build_child(Checked::new(10, test.clone()), |node_builder| {
+                        node_builder.add_child(Checked::new(11, test.clone()));
+                        node_builder.add_child(Checked::new(12, test.clone()));
+                        node_builder.add_child(Checked::new(13, test.clone()));
+                    });
+                    node_builder.add_child(Checked::new(20, test.clone()));
+                    node_builder.build_child(Checked::new(30, test.clone()), |node_builder| {
+                        node_builder.add_child(Checked::new(31, test.clone()));
+                        node_builder.add_child(Checked::new(32, test.clone()));
+                        panic!("Intentional panic");
+                    });
+                });
+            }));
+            assert!(ret_val.is_err());
+            assert_eq!(test.num_undropped(), 5);
         }
         assert_eq!(test.num_undropped(), 0);
     }

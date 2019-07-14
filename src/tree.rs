@@ -1,41 +1,23 @@
-use std::convert::{From, TryFrom, AsRef, AsMut};
+use std::convert::{From, TryFrom, AsRef};
 use crate::*;
 
 /// test
-pub struct IronedTree<T> {
-    forest: IronedForest<T>,
+#[derive(Eq, PartialEq, Hash, Clone)]
+pub struct PackedTree<T> {
+    forest: PackedForest<T>,
 }
 
-impl<T> IronedTree<T> {
-    pub fn new(root_val: T, node_builder_cb: impl FnOnce(&mut NodeBuilder<T>)) -> IronedTree<T> {
-        IronedTree::new_with_return_val(root_val, node_builder_cb).0
+impl<T> PackedTree<T> {
+    pub fn new(root_val: T, node_builder_cb: impl FnOnce(&mut NodeBuilder<T>)) -> PackedTree<T> {
+        let mut forest = PackedForest::new();
+        forest.build_tree(root_val, node_builder_cb);
+        PackedTree { forest }
     }
 
-    pub fn new_with_return_val<R>(
-        root_val: T,
-        node_builder_cb: impl FnOnce(&mut NodeBuilder<T>) -> R,
-    ) -> (IronedTree<T>, R) {
-        let mut forest = IronedForest::new();
-        let ret = forest.build_tree(root_val, node_builder_cb);
-        (IronedTree { forest }, ret)
-    }
-
-    pub fn new_with_capacity(
-        root_val: T,
-        node_builder_cb: impl FnOnce(&mut NodeBuilder<T>),
-        capacity: usize,
-    ) -> IronedTree<T> {
-        IronedTree::new_with_capacity_and_return_val(root_val, node_builder_cb, capacity).0
-    }
-
-    pub fn new_with_capacity_and_return_val<R>(
-        root_val: T,
-        node_builder_cb: impl FnOnce(&mut NodeBuilder<T>) -> R,
-        capacity: usize,
-    ) -> (IronedTree<T>, R) {
-        let mut forest = IronedForest::with_capacity(capacity);
-        let ret = forest.build_tree(root_val, node_builder_cb);
-        (IronedTree { forest }, ret)
+    pub fn new_by_ret_val(node_builder_cb: impl FnOnce(&mut NodeBuilder<T>) -> T) -> PackedTree<T> {
+        let mut forest = PackedForest::new();
+        forest.build_tree_by_ret_val(node_builder_cb);
+        PackedTree { forest }
     }
 
     pub fn root(&self) -> NodeRef<T> {
@@ -46,8 +28,10 @@ impl<T> IronedTree<T> {
         self.forest.iter_trees_mut().next().unwrap()
     }
 
-    pub fn drain_root(&mut self) -> NodeDrain<T> {
-        self.forest.drain_trees().next().unwrap()
+    pub fn drain(self) -> PackedTreeDrain<T> {
+        PackedTreeDrain {
+            forest: self.forest
+        }
     }
 
     pub fn iter_flattened<'a>(
@@ -66,12 +50,6 @@ impl<T> IronedTree<T> {
         self.forest.iter_flattened_mut()
     }
 
-    pub fn drain_flattened(
-        &mut self,
-    ) -> std::iter::Map<std::vec::Drain<NodeData<T>>, impl FnMut(NodeData<T>) -> T> {
-        self.forest.drain_flattened()
-    }
-
     /// Read-only view of the raw data.
     pub fn raw_data(&self) -> &Vec<NodeData<T>> {
         self.forest.raw_data()
@@ -82,31 +60,42 @@ impl<T> IronedTree<T> {
     }
 }
 
-impl<T> TryFrom<IronedForest<T>> for IronedTree<T> {
+impl<T> TryFrom<PackedForest<T>> for PackedTree<T> {
     type Error = ();
-    fn try_from(forest: IronedForest<T>) -> Result<Self, Self::Error> {
+    fn try_from(forest: PackedForest<T>) -> Result<Self, Self::Error> {
         if forest.iter_trees().count() == 1 {
-            Ok(IronedTree { forest })
+            Ok(PackedTree { forest })
         } else {
             Err(())
         }
     }
 }
 
-impl<T> AsRef<IronedForest<T>> for IronedTree<T> {
-    fn as_ref(&self) -> &IronedForest<T> {
+impl<T> AsRef<PackedForest<T>> for PackedTree<T> {
+    fn as_ref(&self) -> &PackedForest<T> {
         &self.forest
     }
 }
 
-impl<T> AsMut<IronedForest<T>> for IronedTree<T> {
-    fn as_mut(&mut self) -> &mut IronedForest<T> {
-        &mut self.forest
+impl<T> From<PackedTree<T>> for PackedForest<T> {
+    fn from(tree: PackedTree<T>) -> Self {
+        tree.forest
     }
 }
 
-impl<T> From<IronedTree<T>> for IronedForest<T> {
-    fn from(tree: IronedTree<T>) -> Self {
-        tree.forest
+/// test
+pub struct PackedTreeDrain<T> {
+    forest: PackedForest<T>,
+}
+
+impl<T> PackedTreeDrain<T> {
+    pub fn drain_root(&mut self) -> NodeDrain<T> {
+        self.forest.drain_trees().next().unwrap()
+    }
+
+    pub fn drain_flattened(
+        &mut self,
+    ) -> std::iter::Map<std::vec::Drain<NodeData<T>>, impl FnMut(NodeData<T>) -> T> {
+        self.forest.drain_flattened()
     }
 }

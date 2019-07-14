@@ -17,7 +17,7 @@ struct FlatNode<T> {
     subtree_size: usize,
 }
 
-impl<T: Serialize> Serialize for IronedForest<T> {
+impl<T: Serialize> Serialize for PackedForest<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -80,7 +80,7 @@ impl<T: Serialize> Serialize for NodeData<T> {
     }
 }
 
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PackedForest<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -173,7 +173,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
             }
 
             struct RootNodeDeserializer<'a, T: 'a> {
-                tree_store_mut_ref: &'a mut IronedForest<T>,
+                tree_store_mut_ref: &'a mut PackedForest<T>,
             }
 
             impl<'de, 'a, T> DeserializeSeed<'de> for RootNodeDeserializer<'a, T>
@@ -220,7 +220,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
             }
 
             struct RootNodeListDeserializer<'a, T> {
-                tree_store_mut_ref: &'a mut IronedForest<T>,
+                tree_store_mut_ref: &'a mut PackedForest<T>,
             }
 
             impl<'de, 'a, T> DeserializeSeed<'de> for RootNodeListDeserializer<'a, T>
@@ -259,7 +259,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                 }
             }
 
-            let mut result = IronedForest::new();
+            let mut result = PackedForest::new();
 
             deserializer.deserialize_seq(RootNodeListDeserializer {
                 tree_store_mut_ref: &mut result,
@@ -268,7 +268,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
             Ok(result)
         } else {
             struct FlatNodeListDeserializer<'a, T> {
-                tree_store_mut_ref: &'a mut IronedForest<T>,
+                tree_store_mut_ref: &'a mut PackedForest<T>,
             }
 
             impl<'de, 'a, T> DeserializeSeed<'de> for FlatNodeListDeserializer<'a, T>
@@ -354,7 +354,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
                 }
             }
 
-            let mut result = IronedForest::new();
+            let mut result = PackedForest::new();
 
             deserializer.deserialize_seq(FlatNodeListDeserializer {
                 tree_store_mut_ref: &mut result,
@@ -369,8 +369,8 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for IronedForest<T> {
 mod tests {
     use super::*;
 
-    fn build_store() -> IronedForest<i32> {
-        let mut store = IronedForest::new();
+    fn build_store() -> PackedForest<i32> {
+        let mut store = PackedForest::new();
         store.build_tree(2, |node| {
             node.build_child(10, |node| {
                 node.add_child(11);
@@ -400,7 +400,7 @@ mod tests {
     fn test_json() {
         let store = build_store();
         let str = ::serde_json::ser::to_string(&store).unwrap();
-        let store2: IronedForest<i32> = ::serde_json::from_str(&str).unwrap();
+        let store2: PackedForest<i32> = ::serde_json::from_str(&str).unwrap();
         let str2 = ::serde_json::ser::to_string(&store2).unwrap();
         assert_eq!(str, str2);
     }
@@ -409,7 +409,7 @@ mod tests {
     fn test_bincode() {
         let store = build_store();
         let vec = ::bincode::serialize(&store).unwrap();
-        let store2: IronedForest<i32> = ::bincode::deserialize(&vec[..]).unwrap();
+        let store2: PackedForest<i32> = ::bincode::deserialize(&vec[..]).unwrap();
         let vec2 = ::bincode::serialize(&store2).unwrap();
         assert_eq!(vec, vec2);
     }

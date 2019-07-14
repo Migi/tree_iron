@@ -11,12 +11,12 @@ fn get_median(test_type: &str, tree_type: &str, algo: &str) -> f64 {
 }
 
 fn plot_tree_type(test_type: &str, tree_type: &str, algos: &[&str], start_pos: f64, mut writer: impl Write) {
-    let ironed_median = get_median(test_type, tree_type, "ironed");
+    let packed_median = get_median(test_type, tree_type, "packed");
 
     for (i,algo) in algos.iter().enumerate() {
         let algo_median = get_median(test_type, tree_type, algo);
 
-        writeln!(writer, "{}\t{}\t{}\t0x{:02X}{:02X}{:02X}", start_pos+(i as f64)*0.2, algo, algo_median/ironed_median, 41-i*4, 103-i*10, 204-i*20).unwrap();
+        writeln!(writer, "{}\t{}\t{}\t0x{:02X}{:02X}{:02X}", start_pos+(i as f64)*0.2, algo, algo_median/packed_median, 41-i*4, 103-i*10, 204-i*20).unwrap();
     }
 }
 
@@ -60,7 +60,7 @@ set output
 fn main() {
     std::fs::create_dir_all("./graphs").unwrap();
 
-    let algos = ["ironed", "bump_tree", "ego_tree", "indextree", "vec_tree", "naive_tree", "ll_tree", "id_tree"];
+    let algos = ["packed", "bump_tree", "ego_tree", "indextree", "vec_tree", "naive_tree", "ll_tree", "id_tree"];
 
     plot_test_type("make", &algos, 7.);
     plot_test_type("hash", &algos, 2.);
