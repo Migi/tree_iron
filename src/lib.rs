@@ -7,7 +7,7 @@
 //!
 //! Also, a node doesn't know how many children it has
 //! without iterating over all of them. If you need to know that, see [`ExactSizePackedTree`] and [`ExactSizePackedForest`],
-//! which do keep track of the number of children each node has (but of course it stores 1 extra `usize` per node).
+//! which do keep track of the number of children each node has (but they store 1 extra `usize` per node).
 //!
 //! # Example
 //! ```

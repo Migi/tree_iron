@@ -348,8 +348,8 @@ impl<T> PackedForest<T> {
     }
 }
 
-/// `NodeData<T>` is the data that a [`PackedForest`] or [`PackedTree`](crate::PackedTree) internally stores per node:
-/// the data `T` and a `usize` indicating the number of nodes in the subtree that has this node as root.
+/// The data that a [`PackedForest`] or [`PackedTree`](crate::PackedTree) internally stores per node:
+/// a value `T` and a `usize` indicating the number of nodes in the subtree that has this node as root.
 ///
 /// This type is not really intended to be used directly if you're a user of this library,
 /// but it is nevertheless exposed if there is a reason you want to access it
@@ -621,7 +621,7 @@ impl<'a, T> NodeBuilder<'a, T> {
     }
 }
 
-/// Iterates a list of nodes in a [`PackedForest`] or [`PackedTree`], usually the list
+/// Iterates a list of nodes in a [`PackedForest`] or [`PackedTree`](crate::PackedTree), usually the list
 /// of children of a node, or the list of root nodes in a [`PackedForest`].
 /// 
 /// See e.g. [`PackedForest::iter_trees`] and [`NodeRef::children`].
@@ -660,7 +660,7 @@ impl<'t, T> Iterator for NodeIter<'t, T> {
     }
 }
 
-/// A shared reference to a node in a [`PackedForest`] or [`PackedTree`].
+/// A shared reference to a node in a [`PackedForest`] or [`PackedTree`](crate::PackedTree).
 pub struct NodeRef<'t, T> {
     slice: &'t [NodeData<T>], // contains (only) the current node and all its descendants
 }
@@ -704,7 +704,7 @@ impl<'t, T> NodeRef<'t, T> {
     }
 }
 
-/// A mutable reference to a node in a [`PackedForest`] or [`PackedTree`].
+/// A mutable reference to a node in a [`PackedForest`] or [`PackedTree`](crate::PackedTree).
 pub struct NodeIterMut<'t, T> {
     remaining_nodes: &'t mut [NodeData<T>], // contains (only) the nodes in the iterator and all their descendants
 }
@@ -749,6 +749,10 @@ impl<'t,T> From<NodeIterMut<'t,T>> for NodeIter<'t,T> {
     }
 }
 
+/// A mutable reference to a node in a [`PackedForest`] or a [`PackedTree`](crate::PackedTree).
+/// 
+/// This reference only allows mutable access to the values in the nodes, not the structure of the node,
+/// so you can't add or remove children from this node.
 pub struct NodeRefMut<'t, T> {
     slice: &'t mut [NodeData<T>], // contains (only) the current node and all its descendants
 }
@@ -819,13 +823,13 @@ impl<'t,T> From<NodeRefMut<'t,T>> for NodeRef<'t,T> {
     }
 }
 
-/// A draining iterator of a list of nodes in a [`PackedForest`] or [`PackedTree`].
+/// A draining iterator of a list of nodes in a [`PackedForest`] or [`PackedTree`](crate::PackedTree).
 /// 
 /// When this iterator is dropped, the nodes remaining in the iterator will be dropped.
 /// If this iterator is leaked instead (through e.g. [`std::mem::forget`]),
 /// these nodes also will be leaked instead.
 /// 
-/// See [`PackedForest::drain_trees`] and [`PackedTree::drain`].
+/// See [`PackedForest::drain_trees`] and [`PackedTree::drain`](crate::PackedTree::drain).
 pub struct NodeListDrain<'t, T> {
     // `remaining_nodes` is a slice containing (only) the remaining nodes in the iterator and all their descendants.
     // Normally slices don't own data, but not in this case.
@@ -887,7 +891,7 @@ impl<'t, T> NodeListDrain<'t, T> {
     }
 }
 
-/// A node in a [`PackedForest`] or [`PackedTree`] that is being drained.
+/// A node in a [`PackedForest`] or [`PackedTree`](crate::PackedTree) that is being drained.
 /// You can move out its fields `val` and `children` (which is a [`NodeListDrain`]) directly.
 pub struct NodeDrain<'t, T> {
     pub val: T,

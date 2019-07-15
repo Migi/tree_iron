@@ -25,7 +25,7 @@ impl<T> PackedTree<T> {
     /// used to add children to the tree.
     ///
     /// For more complex use cases, see [`new_by_ret_val`](PackedTree::new_by_ret_val) and
-    /// [`try_new_from_forest`](PackedTree::try_new_from_forest).
+    /// [`try_from_forest`](PackedTree::try_from_forest).
     #[inline]
     pub fn new(root_val: T, node_builder_cb: impl FnOnce(&mut NodeBuilder<T>)) -> PackedTree<T> {
         let mut forest = PackedForest::new();
@@ -41,7 +41,7 @@ impl<T> PackedTree<T> {
     /// This is useful when you don't know the value that the tree's root node will have before creating the tree.
     /// See [`NodeBuilder::build_child_by_ret_val`] for an example.
     ///
-    /// For more complex use cases, see [`PackedTree::try_new_from_forest`].
+    /// For more complex use cases, see [`PackedTree::try_from_forest`].
     #[inline]
     pub fn new_by_ret_val(node_builder_cb: impl FnOnce(&mut NodeBuilder<T>) -> T) -> PackedTree<T> {
         let mut forest = PackedForest::new();
@@ -49,7 +49,7 @@ impl<T> PackedTree<T> {
         PackedTree { forest }
     }
 
-    /// Create a new `PackedTree` from the given `Forest`. Returns `None` when the forest doesn't have exactly 1 tree.
+    /// Create a new `PackedTree` from the given [`PackedForest`]. Returns `None` when the forest doesn't have exactly 1 tree.
     /// 
     /// In some cases, it is easier to build a [`PackedForest`] than a [`PackedTree`], for 2 reasons:
     ///   * [`PackedTree`] doesn't have the equivalent of the method [`PackedForest::get_tree_builder`].
@@ -85,6 +85,42 @@ impl<T> PackedTree<T> {
     #[inline(always)]
     pub fn root_mut(&mut self) -> NodeRefMut<T> {
         self.forest.iter_trees_mut().next().unwrap()
+    }
+
+    /// Get a [`NodeRef`] to the node with the given index, or `None` if the index is out of bounds.
+    /// 
+    /// Nodes are indexed in pre-order ordering, i.e., in the order you would encounter
+    /// them in a depth-first search. So the index of the root is 0, the index of its first child (if any) is 1,
+    /// the index of that first child's first child (if any) is 2, etc.
+    #[inline(always)]
+    pub fn get(&self, index: usize) -> Option<NodeRef<T>> {
+        self.forest.get(index)
+    }
+
+    /// Get a [`NodeRefMut`] to the node with the given index, or `None` if the index is out of bounds.
+    /// 
+    /// Nodes are indexed in pre-order ordering, i.e., in the order you would encounter
+    /// them in a depth-first search. So the index of the root is 0, the index of its first child (if any) is 1,
+    /// the index of that first child's first child (if any) is 2, etc.
+    #[inline(always)]
+    pub fn get_mut(&mut self, index: usize) -> Option<NodeRefMut<T>> {
+        self.forest.get_mut(index)
+    }
+
+    /// Get a [`NodeRef`] to the node with the given index.
+    /// 
+    /// Does **not** check that the given index is in bounds, and is therefore unsafe.
+    #[inline(always)]
+    pub unsafe fn get_unchecked(&self, index: usize) -> NodeRef<T> {
+        self.forest.get_unchecked(index)
+    }
+
+    /// Get a [`NodeRefMut`] to the node with the given index.
+    /// 
+    /// Does **not** check that the given index is in bounds, and is therefore unsafe.
+    #[inline(always)]
+    pub unsafe fn get_unchecked_mut(&mut self, index: usize) -> NodeRefMut<T> {
+        self.forest.get_unchecked_mut(index)
     }
 
     /// Converts `self` into a [`PackedTreeDrain`] which can then be used to drain the tree.
@@ -159,8 +195,7 @@ impl<T> From<PackedTree<T>> for PackedForest<T> {
     }
 }
 
-/// A [`PackedTree`] that is being drained.
-/// See [`PackedTree::drain`].
+/// A [`PackedTree`] that is being drained. See [`PackedTree::drain`].
 pub struct PackedTreeDrain<T> {
     forest: PackedForest<T>,
 }

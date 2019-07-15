@@ -186,6 +186,31 @@ fn hash_tree<T:Hash>(root: impl VisitableNode<T>) -> u64 {
     hasher.finish()
 }
 
+/*struct BfsHasher<'a> {
+    hasher: &'a mut twox_hash::XxHash64,
+    stack: Vec<>
+}
+
+impl<'a,T:Hash> TreeVisitor<T> for BfsHasher<'a> {
+    fn visit_node(&mut self, node: impl VisitableNode<T>) {
+        node.val().hash(self.hasher);
+        let mut hasher = twox_hash::XxHash64::with_seed(123456789);
+        node.visit_children(BfsHasher {
+            hasher: &mut hasher,
+        });
+        self.hasher.write_u64(hasher.finish());
+    }
+}
+
+fn bfs_hash_tree<T:Hash>(root: impl VisitableNode<T>) -> u64 {
+    let mut hasher = twox_hash::XxHash64::with_seed(123456789);
+    root.val().hash(&mut hasher);
+    root.visit_children(BfsHasher {
+        hasher: &mut hasher,
+    });
+    hasher.finish()
+}*/
+
 // ================ Here begin the implementations of the libraries
 
 fn create_packed_tree_rec<C: NodeCreator>(creator: &mut C, rng: &mut impl Rng, packed_node_creator: &mut NodeBuilder<C::ValType>) {
