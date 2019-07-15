@@ -60,7 +60,7 @@ set output
 fn main() {
     std::fs::create_dir_all("./graphs").unwrap();
 
-    let algos = ["packed", "bump_tree", "ego_tree", "indextree", "vec_tree", "naive_tree", "ll_tree", "id_tree"];
+    let algos = ["packed", "es", "bump", "ego", "index", "vec", "naive", "ll", "id"];
 
     plot_test_type("make", &algos, 7.);
     plot_test_type("hash", &algos, 2.);

@@ -4,7 +4,7 @@ extern crate criterion;
 use criterion::Criterion;
 use criterion::black_box;
 
-use packed_tree::{PackedTree, NodeBuilder};
+use packed_tree::{PackedTree, ExactSizePackedTree, NodeBuilder, ExactSizeNodeBuilder};
 
 use rand::{Rng, SeedableRng};
 use rand::distributions::{Distribution, Uniform};
@@ -153,7 +153,7 @@ impl<'a,T> TreeVisitor<T> for NodesPerLevelCounter<'a> {
     }
 }
 
-fn count_nodes_per_level<T>(root: impl VisitableNode<T>) -> Vec<usize> {
+fn _count_nodes_per_level<T>(root: impl VisitableNode<T>) -> Vec<usize> {
     let mut result = vec![1];
     root.visit_children(NodesPerLevelCounter {
         nodes_per_level: &mut result,
@@ -161,7 +161,6 @@ fn count_nodes_per_level<T>(root: impl VisitableNode<T>) -> Vec<usize> {
     });
     result
 }
-
 
 struct TreeHasher<'a> {
     hasher: &'a mut twox_hash::XxHash64,
@@ -204,6 +203,31 @@ fn create_packed_tree<C: NodeCreator>(mut creator: C, rng: &mut impl Rng) -> Pac
 }
 
 impl<'a,T> VisitableNode<T> for packed_tree::NodeRef<'a,T> {
+    fn val(&self) -> &T {
+        self.val()
+    }
+    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+        for child in self.children() {
+            v.visit_node(child);
+        }
+    }
+}
+
+fn create_exact_size_packed_tree_rec<C: NodeCreator>(creator: &mut C, rng: &mut impl Rng, packed_node_creator: &mut ExactSizeNodeBuilder<C::ValType>) {
+    while let Some(mut child_creator) = creator.next_child(rng) {
+        packed_node_creator.build_child(child_creator.val(), |child_packed_node_creator| {
+            create_exact_size_packed_tree_rec(&mut child_creator, rng, child_packed_node_creator);
+        });
+    }
+}
+
+fn create_exact_size_packed_tree<C: NodeCreator>(mut creator: C, rng: &mut impl Rng) -> ExactSizePackedTree<C::ValType> {
+    ExactSizePackedTree::new(creator.val(), |packed_node_creator| {
+        create_exact_size_packed_tree_rec(&mut creator, rng, packed_node_creator);
+    })
+}
+
+impl<'a,T> VisitableNode<T> for packed_tree::ExactSizeNodeRef<'a,T> {
     fn val(&self) -> &T {
         self.val()
     }
@@ -478,13 +502,24 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
             hash_tree(tree.root())
         });
     });
-    c.bench_function(&format!("make_{}_indextree", type_name), move |b| {
+    c.bench_function(&format!("make_{}_es", type_name), move |b| {
+        b.iter(|| {
+            create_exact_size_packed_tree(creator(), &mut black_box(make_rng()))
+        });
+    });
+    c.bench_function(&format!("hash_{}_es", type_name), move |b| {
+        let tree = create_exact_size_packed_tree(creator(), &mut black_box(make_rng()));
+        b.iter(|| {
+            hash_tree(tree.root())
+        });
+    });
+    c.bench_function(&format!("make_{}_index", type_name), move |b| {
         b.iter(|| {
             let mut arena = indextree::Arena::new();
             create_index_tree(creator(), &mut black_box(make_rng()), &mut arena).unwrap()
         });
     });
-    c.bench_function(&format!("hash_{}_indextree", type_name), move |b| {
+    c.bench_function(&format!("hash_{}_index", type_name), move |b| {
         let mut arena = indextree::Arena::new();
         let tree = create_index_tree(creator(), &mut black_box(make_rng()), &mut arena).unwrap();
         b.iter(|| {
@@ -494,12 +529,12 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
             })
         });
     });
-    c.bench_function(&format!("make_{}_id_tree", type_name), move |b| {
+    c.bench_function(&format!("make_{}_id", type_name), move |b| {
         b.iter(|| {
             create_id_tree(creator(), &mut black_box(make_rng())).unwrap()
         });
     });
-    c.bench_function(&format!("hash_{}_id_tree", type_name), move |b| {
+    c.bench_function(&format!("hash_{}_id", type_name), move |b| {
         let tree = create_id_tree(creator(), &mut black_box(make_rng())).unwrap();
         b.iter(|| {
             hash_tree(IdTreeNode {
@@ -508,23 +543,23 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
             })
         });
     });
-    c.bench_function(&format!("make_{}_ego_tree", type_name), move |b| {
+    c.bench_function(&format!("make_{}_ego", type_name), move |b| {
         b.iter(|| {
             create_ego_tree(creator(), &mut black_box(make_rng()))
         });
     });
-    c.bench_function(&format!("hash_{}_ego_tree", type_name), move |b| {
+    c.bench_function(&format!("hash_{}_ego", type_name), move |b| {
         let tree = create_ego_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
             hash_tree(tree.root())
         });
     });
-    c.bench_function(&format!("make_{}_vec_tree", type_name), move |b| {
+    c.bench_function(&format!("make_{}_vec", type_name), move |b| {
         b.iter(|| {
             create_vec_tree(creator(), &mut black_box(make_rng()))
         });
     });
-    c.bench_function(&format!("hash_{}_vec_tree", type_name), move |b| {
+    c.bench_function(&format!("hash_{}_vec", type_name), move |b| {
         let tree = create_vec_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
             hash_tree(VecTreeNode {
@@ -533,36 +568,36 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
             })
         });
     });
-    c.bench_function(&format!("make_{}_naive_tree", type_name), move |b| {
+    c.bench_function(&format!("make_{}_naive", type_name), move |b| {
         b.iter(|| {
             create_naive_tree(creator(), &mut black_box(make_rng()))
         });
     });
-    c.bench_function(&format!("hash_{}_naive_tree", type_name), move |b| {
+    c.bench_function(&format!("hash_{}_naive", type_name), move |b| {
         let tree = create_naive_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
             hash_tree(&tree)
         });
     });
-    c.bench_function(&format!("make_{}_ll_tree", type_name), move |b| {
+    c.bench_function(&format!("make_{}_ll", type_name), move |b| {
         b.iter(|| {
             create_ll_tree(creator(), &mut black_box(make_rng()))
         });
     });
-    c.bench_function(&format!("hash_{}_ll_tree", type_name), move |b| {
+    c.bench_function(&format!("hash_{}_ll", type_name), move |b| {
         let tree = create_ll_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
             hash_tree(&tree)
         });
     });
-    c.bench_function(&format!("make_{}_bump_tree", type_name), move |b| {
+    c.bench_function(&format!("make_{}_bump", type_name), move |b| {
         let mut bump = bumpalo::Bump::new();
         b.iter(|| {
             bump.reset();
             black_box(create_bump_tree(creator(), &mut black_box(make_rng()), &bump));
         });
     });
-    c.bench_function(&format!("hash_{}_bump_tree", type_name), move |b| {
+    c.bench_function(&format!("hash_{}_bump", type_name), move |b| {
         let mut bump = bumpalo::Bump::new();
         let _ = create_bump_tree(creator(), &mut black_box(make_rng()), &bump);
         bump.reset();

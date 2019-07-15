@@ -63,10 +63,15 @@ unsafe fn slice_split_first_unchecked_mut<T>(slice: &mut [T]) -> (&mut T,&mut [T
 }
 
 /// A `PackedForest` is a list of trees, all stored in a single `Vec` with only 1 `usize` overhead per node.
-/// This allows for fast and cache-friendly iteration (in pre-order or depth-first order) and efficient storage of the trees.
+/// It allows for fast creation, cache-friendly iteration (in pre-order or depth-first order),
+/// and efficient storage of the trees.
+/// 
+/// A limitation of `PackedForest` is that its trees have to be created in one go. You cannot add or remove
+/// nodes from a tree once it has been added to a `PackedForest`.
+/// 
+/// If you're only intending to store a single tree, see [`PackedTree`](crate::PackedTree).
 ///
-/// As opposed to [`PackedTree`](crate::PackedTree), where you can never modify the structure once it's created,
-/// you can add trees to a [`PackedForest`] after it's created (but you can't modify their structure).
+/// See the [module-level documentation](index.html) for more information.
 ///
 /// # Example
 /// ```
@@ -102,8 +107,6 @@ unsafe fn slice_split_first_unchecked_mut<T>(slice: &mut [T]) -> (&mut T,&mut [T
 ///
 /// assert_eq!(num_nodes_in_each_tree, [4, 2]);
 /// ```
-///
-/// See the [module-level documentation](index.html) for more.
 ///
 // =============== IMPLEMENTATION SAFETY NOTES ===================
 //
@@ -201,14 +204,15 @@ impl<T> PackedForest<T> {
         }
     }
 
-    /// Drain the trees in this forest.
-    /// This function returns an iterator over the values of the tree, moving them out of this forest.
-    /// Afterwards, the forest will be empty.
+    /// Returns a draining iterator over the trees of this forest. The values returned by this iterator
+    /// are [`NodeDrain`]s, a simple struct containing the public fields `val` (the value of the node) and
+    /// `children`, another draining iterator over the children of the node.
+    /// 
+    /// After iterating or after dropping the iterator, the forest will be empty.
     /// 
     /// **WARNING:** if the [`NodeListDrain`] returned by this function is leaked (i.e. through [`std::mem::forget`])
     /// without iterating over all the values in it, then the values of the nodes that were not iterated over
-    /// will also be leaked (their `drop` method won't be called). Leaking is considered "safe" in Rust,
-    /// so this function is safe, but you still probably want to avoid doing that.
+    /// will also be leaked (their `drop` method won't be called). They will still be removed from the forest though.
     #[inline(always)]
     pub fn drain_trees(&mut self) -> NodeListDrain<'_, T> {
         // first, get the current length of the data vector.
@@ -317,10 +321,12 @@ impl<T> PackedForest<T> {
         self.data.iter_mut().map(|node_data| &mut node_data.val)
     }
 
-    /// Drain all the values in all the nodes of all the trees in this forest, in pre-order order.
+    /// Returns a draining iterator over all the values in all the nodes of all the trees in this forest, in pre-order order.
+    /// 
+    /// Dropping the iterator drops all the nodes in the forest that haven't been iterated over yet.
     /// 
     /// **WARNING:** Leaking the returned iterator without iterating over all of its values will leak the
-    /// values that were not iterated over.
+    /// values that were not iterated over. They will still be removed from the tree though.
     #[inline(always)]
     pub fn drain_flattened(
         &mut self,
@@ -395,6 +401,7 @@ pub struct NodeBuilder<'a, T> {
 }
 
 impl<'a, T> Drop for NodeBuilder<'a, T> {
+    #[inline]
     fn drop(&mut self) {
         unsafe {
             let data = &mut self.forest.data;
@@ -421,6 +428,7 @@ impl<'a, T> NodeBuilder<'a, T> {
     /// Returns the index of the node that is being built.
     /// 
     /// See also [`PackedForest::get`] and [`PackedForest::get_mut`].
+    #[inline(always)]
     pub fn index(&self) -> usize {
         self.index
     }
@@ -443,7 +451,6 @@ impl<'a, T> NodeBuilder<'a, T> {
     /// # Example:
     /// ```
     /// use packed_tree::{PackedTree, PackedForest, NodeRef, NodeRefMut, NodeBuilder};
-    /// use std::convert::TryFrom;
     /// 
     /// // Assume you already have some kind of tree with floating point values, like this:
     /// let value_tree = PackedTree::new(1.2, |node_builder| {
@@ -474,7 +481,7 @@ impl<'a, T> NodeBuilder<'a, T> {
     /// let root_builder = sum_forest.get_tree_builder();
     /// process_node(value_tree.root(), root_builder);
     /// 
-    /// let sum_tree = PackedTree::try_from(sum_forest).unwrap();
+    /// let sum_tree = PackedTree::try_from_forest(sum_forest).unwrap();
     /// 
     /// assert_eq!(*sum_tree.root().val(), 1.2+3.4+5.6+7.8);
     /// ```
@@ -618,17 +625,18 @@ impl<'a, T> NodeBuilder<'a, T> {
 /// of children of a node, or the list of root nodes in a [`PackedForest`].
 /// 
 /// See e.g. [`PackedForest::iter_trees`] and [`NodeRef::children`].
-#[derive(Copy)]
 pub struct NodeIter<'t, T> {
     remaining_nodes: &'t [NodeData<T>], // contains (only) the nodes in the iterator and all their descendants
 }
 
+// Not using #[derive(Copy)] because it adds the T:Copy bound, which is unnecessary
+impl<'t,T> Copy for NodeIter<'t,T> {}
+
+// Not using #[derive(Clone)] because it adds the T:Clone bound, which is unnecessary
 impl<'t, T> Clone for NodeIter<'t, T> {
     #[inline(always)]
     fn clone(&self) -> Self {
-        Self {
-            remaining_nodes: self.remaining_nodes,
-        }
+        *self
     }
 }
 
@@ -733,6 +741,7 @@ impl<'t, T> NodeIterMut<'t, T> {
 }
 
 impl<'t,T> From<NodeIterMut<'t,T>> for NodeIter<'t,T> {
+    #[inline(always)]
     fn from(val: NodeIterMut<'t,T>) -> Self {
         NodeIter {
             remaining_nodes: val.remaining_nodes
@@ -802,6 +811,7 @@ impl<'t, T> NodeRefMut<'t, T> {
 }
 
 impl<'t,T> From<NodeRefMut<'t,T>> for NodeRef<'t,T> {
+    #[inline(always)]
     fn from(val: NodeRefMut<'t,T>) -> Self {
         NodeRef {
             slice: val.slice
@@ -826,6 +836,7 @@ pub struct NodeListDrain<'t, T> {
 }
 
 impl<'t, T> Drop for NodeListDrain<'t, T> {
+    #[inline(always)]
     fn drop(&mut self) {
         // read out all values in the slice and drop them
         for node in self.remaining_nodes.iter_mut() {
@@ -843,9 +854,25 @@ impl<'t, T> Iterator for NodeListDrain<'t, T> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(cur_node) = self.remaining_nodes.get(0) {
             let cur_node_subtree_size = cur_node.subtree_size.get();
-            Some(NodeDrain {
-                slice: unsafe { slice_split_off_first_n_unchecked_mut(&mut self.remaining_nodes, cur_node_subtree_size) }
-            })
+            unsafe {
+                // Split off the first cur_node_subtree_size elements from the slice.
+                // These nodes correspond to the first node and its descendants.
+                let cur_node_slice = slice_split_off_first_n_unchecked_mut(&mut self.remaining_nodes, cur_node_subtree_size);
+
+                // Split off the first node.
+                let (cur_node_data_ref, cur_node_children_slice) = slice_split_first_unchecked_mut(cur_node_slice);
+
+                // Read out the data from this first node.
+                // No other slices contain this node anymore.
+                let val: T = std::ptr::read(&cur_node_data_ref.val);
+
+                Some(NodeDrain {
+                    val,
+                    children: NodeListDrain {
+                        remaining_nodes: cur_node_children_slice
+                    }
+                })
+            }
         } else {
             None
         }
@@ -860,73 +887,9 @@ impl<'t, T> NodeListDrain<'t, T> {
     }
 }
 
-/// A reference to a node in a [`PackedForest`] or [`PackedTree`] that is being drained.
-/// 
-/// When this [`NodeDrain`] is dropped, the node and all its descendants will be dropped.
-/// If it is leaked instead (through e.g. [`std::mem::forget`]), these nodes also will be leaked instead.
-/// 
-/// See [`PackedForest::drain_trees`] and [`PackedTree::drain`].
+/// A node in a [`PackedForest`] or [`PackedTree`] that is being drained.
+/// You can move out its fields `val` and `children` (which is a [`NodeListDrain`]) directly.
 pub struct NodeDrain<'t, T> {
-    // `remaining_nodes` is a slice containing (only) the current node (i.e., the first node in the slice) and all its descendants.
-    // Normally slices don't own data, but not in this case.
-    // The data is actually owned by the Vec that this NodeDrain borrows, but it's out of the bounds of that Vec (but still inside its capacity).
-    // Therefore the NodeDrain can pretend like it owns the data in this slice, it can drop them in drop(),
-    // and it can move out values using ptr::read (as long as it makes sure to update the slice to prevent a double drop)
-    slice: &'t mut [NodeData<T>],
-}
-
-impl<'t, T> Drop for NodeDrain<'t, T> {
-    #[inline]
-    fn drop(&mut self) {
-        // read out all values in the slice and drop them
-        for node in self.slice.iter_mut() {
-            unsafe {
-                let value: NodeData<T> = std::ptr::read(node);
-                std::mem::drop(value); // not strictly needed
-            }
-        }
-    }
-}
-
-impl<'t, T> NodeDrain<'t, T> {
-    /// Split this [`NodeDrain`] into a pair of the value of the node and an iterator of its children.
-    #[inline(always)]
-    pub fn into_val_and_children(mut self) -> (T, NodeListDrain<'t, T>) {
-        // move the slice out of self, so it won't drop the data anymore
-        let slice = std::mem::replace(&mut self.slice, &mut []);
-
-        // split off the first element
-        let (node_data_ref, remaining_nodes) = slice.split_first_mut().unwrap();
-
-        unsafe {
-            // read the NodeData out of the ref we have to it
-            let node_data: NodeData<T> = std::ptr::read(node_data_ref);
-
-            // Return the value (the user will drop it)
-            // and the remaining slice as a NodeListDrain, which now owns the values in that slice (and will drop them)
-            (node_data.val, NodeListDrain { remaining_nodes })
-        }
-    }
-
-    #[inline(always)]
-    pub fn val(&self) -> &T {
-        debug_assert!(self.slice.len() > 0);
-        unsafe { &self.slice.get_unchecked(0).val }
-    }
-
-    #[inline(always)]
-    pub fn val_mut(&mut self) -> &mut T {
-        debug_assert!(self.slice.len() > 0);
-        unsafe { &mut self.slice.get_unchecked_mut(0).val }
-    }
-
-    #[inline(always)]
-    pub fn num_descendants_incl_self(&self) -> usize {
-        self.slice.len()
-    }
-
-    #[inline(always)]
-    pub fn num_descendants_excl_self(&self) -> usize {
-        self.slice.len() - 1
-    }
+    pub val: T,
+    pub children: NodeListDrain<'t, T>
 }
