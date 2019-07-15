@@ -3,7 +3,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
 fn get_median(test_type: &str, tree_type: &str, algo: &str) -> f64 {
-    let file = File::open(Path::new(&format!("../../target/criterion/{}_{}_{}/base/estimates.json", test_type, tree_type, algo))).unwrap();
+    let file = File::open(Path::new(&format!("../../target/criterion/{}_{}_{}/base/estimates.json", test_type, tree_type, algo)))
+        .unwrap_or_else(|_| panic!("Couldn't open file \"../../target/criterion/{}_{}_{}/base/estimates.json\"", test_type, tree_type, algo));
     let reader = BufReader::new(file);
     let val : serde_json::Value = serde_json::de::from_reader(reader).unwrap();
 
@@ -21,15 +22,19 @@ fn plot_tree_type(test_type: &str, tree_type: &str, algos: &[&str], start_pos: f
 }
 
 fn plot_test_type(test_type: &str, algos: &[&str], ymax:f64) {
-    let tree_types = ["flat", "shallow", "binary", "wide_random", "deep_random"];
+    let tree_types = ["small", "shallow", "binary", "wide_random", "deep_random"];
 
-    let file = File::create(Path::new(&format!("./graphs/{}.txt", test_type))).unwrap();
-    let mut writer = BufWriter::new(file);
+    // write the data
+    {
+        let file = File::create(Path::new(&format!("./graphs/{}.txt", test_type))).unwrap();
+        let mut writer = BufWriter::new(file);
 
-    for (i,tree_type) in tree_types.iter().enumerate() {
-        plot_tree_type(test_type, tree_type, &algos, 1. + (i as f64)*3., &mut writer);
+        for (i,tree_type) in tree_types.iter().enumerate() {
+            plot_tree_type(test_type, tree_type, &algos, 1. + (i as f64)*3., &mut writer);
+        }
     }
 
+    // plot the graphs
     {
         let gp_text = format!("
 set term png noenhanced
@@ -50,11 +55,23 @@ set output
         write!(writer, "{}", gp_text).unwrap();
         writer.flush().unwrap();
     }
+    
+    println!("Plotting: gnuplot ./graphs/{}.gp", test_type);
 
-    std::process::Command::new("gnuplot")
-        .args(&[format!("./graphs/{}.gp", test_type)])
+    let output = std::process::Command::new("gnuplot")
+        .arg(format!("./graphs/{}.gp", test_type))
         .output()
-        .expect("failed to execute gnuplot");
+        .unwrap_or_else(|_| panic!(format!("failed to execute \"gnuplot ./graphs/{}.gp\"", test_type)));
+    
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    let stderr = std::str::from_utf8(&output.stderr).unwrap();
+    if stdout != "" {
+        println!("Stdout: {}", stdout);
+    }
+    if stderr != "" {
+        println!("Stderr: {}", stderr);
+    }
+    println!("Done.");
 }
 
 fn main() {
@@ -64,4 +81,5 @@ fn main() {
 
     plot_test_type("make", &algos, 7.);
     plot_test_type("hash", &algos, 2.);
+    plot_test_type("bfs", &algos, 2.);
 }

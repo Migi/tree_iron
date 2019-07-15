@@ -12,6 +12,7 @@ use rand::distributions::{Distribution, Uniform};
 use failure::Fallible;
 use std::hash::{Hash,Hasher};
 use std::time::Duration;
+use std::marker::PhantomData;
 
 trait NodeCreator : Sized {
     type ValType;
@@ -51,7 +52,7 @@ impl<'a> NodeCreator for SimpleNodeCreator<'a> {
     }
 }
 
-fn make_flat_tree() -> SimpleNodeCreator<'static> {
+fn _make_flat_tree() -> SimpleNodeCreator<'static> {
     SimpleNodeCreator {
         val: 1,
         depth: 0,
@@ -60,12 +61,21 @@ fn make_flat_tree() -> SimpleNodeCreator<'static> {
     }
 }
 
+fn make_small_tree() -> SimpleNodeCreator<'static> {
+    SimpleNodeCreator {
+        val: 1,
+        depth: 0,
+        num_children_created: 0,
+        children_per_node_per_level: &[5,5,5]
+    }
+}
+
 fn make_shallow_tree() -> SimpleNodeCreator<'static> {
     SimpleNodeCreator {
         val: 1,
         depth: 0,
         num_children_created: 0,
-        children_per_node_per_level: &[100,10]
+        children_per_node_per_level: &[100,100]
     }
 }
 
@@ -74,7 +84,7 @@ fn make_binary_tree() -> SimpleNodeCreator<'static> {
         val: 1,
         depth: 0,
         num_children_created: 0,
-        children_per_node_per_level: &[2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+        children_per_node_per_level: &[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
     }
 }
 
@@ -113,7 +123,7 @@ fn make_wide_random_tree() -> RandomNodeCreator<'static> {
     RandomNodeCreator {
         val: 1,
         depth: 0,
-        child_chance_per_level: &[0.99, 0.9]
+        child_chance_per_level: &[0.99, 0.99]
     }
 }
 
@@ -121,17 +131,17 @@ fn make_deep_random_tree() -> RandomNodeCreator<'static> {
     RandomNodeCreator {
         val: 1,
         depth: 0,
-        child_chance_per_level: &[2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3.]
+        child_chance_per_level: &[2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3., 2./3.]
     }
 }
 
-trait TreeVisitor<T> {
-    fn visit_node(&mut self, node: impl VisitableNode<T>);
+trait TreeVisitor<T, N: VisitableNode<T>> {
+    fn visit_node(&mut self, node: N);
 }
 
-trait VisitableNode<T> {
+trait VisitableNode<T> : Sized {
     fn val(&self) -> &T;
-    fn visit_children(self, v: impl TreeVisitor<T>);
+    fn visit_children(self, v: impl TreeVisitor<T, Self>);
 }
 
 struct NodesPerLevelCounter<'a> {
@@ -139,8 +149,8 @@ struct NodesPerLevelCounter<'a> {
     cur_level: usize,
 }
 
-impl<'a,T> TreeVisitor<T> for NodesPerLevelCounter<'a> {
-    fn visit_node(&mut self, node: impl VisitableNode<T>) {
+impl<'a,T,N:VisitableNode<T>> TreeVisitor<T,N> for NodesPerLevelCounter<'a> {
+    fn visit_node(&mut self, node: N) {
         if let Some(nodes) = self.nodes_per_level.get_mut(self.cur_level) {
             *nodes += 1;
         } else {
@@ -153,7 +163,7 @@ impl<'a,T> TreeVisitor<T> for NodesPerLevelCounter<'a> {
     }
 }
 
-fn _count_nodes_per_level<T>(root: impl VisitableNode<T>) -> Vec<usize> {
+fn count_nodes_per_level<T,N:VisitableNode<T>>(root: N) -> Vec<usize> {
     let mut result = vec![1];
     root.visit_children(NodesPerLevelCounter {
         nodes_per_level: &mut result,
@@ -166,8 +176,8 @@ struct TreeHasher<'a> {
     hasher: &'a mut twox_hash::XxHash64,
 }
 
-impl<'a,T:Hash> TreeVisitor<T> for TreeHasher<'a> {
-    fn visit_node(&mut self, node: impl VisitableNode<T>) {
+impl<'a,T:Hash,N:VisitableNode<T>> TreeVisitor<T,N> for TreeHasher<'a> {
+    fn visit_node(&mut self, node: N) {
         node.val().hash(self.hasher);
         let mut hasher = twox_hash::XxHash64::with_seed(123456789);
         node.visit_children(TreeHasher {
@@ -186,30 +196,29 @@ fn hash_tree<T:Hash>(root: impl VisitableNode<T>) -> u64 {
     hasher.finish()
 }
 
-/*struct BfsHasher<'a> {
-    hasher: &'a mut twox_hash::XxHash64,
-    stack: Vec<>
+struct BfsHasher<'a, T:Hash, N:VisitableNode<T>> {
+    stack: &'a mut Vec<N>,
+    phantom_t: PhantomData<T>
 }
 
-impl<'a,T:Hash> TreeVisitor<T> for BfsHasher<'a> {
-    fn visit_node(&mut self, node: impl VisitableNode<T>) {
-        node.val().hash(self.hasher);
-        let mut hasher = twox_hash::XxHash64::with_seed(123456789);
-        node.visit_children(BfsHasher {
-            hasher: &mut hasher,
-        });
-        self.hasher.write_u64(hasher.finish());
+impl<'a, T:Hash, N: VisitableNode<T>> TreeVisitor<T,N> for BfsHasher<'a,T,N> {
+    fn visit_node(&mut self, node: N) {
+        self.stack.push(node);
     }
 }
 
-fn bfs_hash_tree<T:Hash>(root: impl VisitableNode<T>) -> u64 {
+fn bfs_hash_tree<T:Hash, N: VisitableNode<T>>(root: N) -> u64 {
     let mut hasher = twox_hash::XxHash64::with_seed(123456789);
-    root.val().hash(&mut hasher);
-    root.visit_children(BfsHasher {
-        hasher: &mut hasher,
-    });
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        node.val().hash(&mut hasher);
+        node.visit_children(BfsHasher {
+            stack: &mut stack,
+            phantom_t: PhantomData
+        });
+    }
     hasher.finish()
-}*/
+}
 
 // ================ Here begin the implementations of the libraries
 
@@ -231,7 +240,7 @@ impl<'a,T> VisitableNode<T> for packed_tree::NodeRef<'a,T> {
     fn val(&self) -> &T {
         self.val()
     }
-    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+    fn visit_children(self, mut v: impl TreeVisitor<T, Self>) {
         for child in self.children() {
             v.visit_node(child);
         }
@@ -256,7 +265,7 @@ impl<'a,T> VisitableNode<T> for packed_tree::ExactSizeNodeRef<'a,T> {
     fn val(&self) -> &T {
         self.val()
     }
-    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+    fn visit_children(self, mut v: impl TreeVisitor<T, Self>) {
         for child in self.children() {
             v.visit_node(child);
         }
@@ -287,7 +296,7 @@ impl<'a,T> VisitableNode<T> for IndexTreeNode<'a,T> {
     fn val(&self) -> &T {
         &self.arena[self.id].data
     }
-    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+    fn visit_children(self, mut v: impl TreeVisitor<T, Self>) {
         for child in self.id.children(self.arena) {
             v.visit_node(IndexTreeNode {
                 id: child,
@@ -322,7 +331,7 @@ impl<'a,T> VisitableNode<T> for IdTreeNode<'a,T> {
     fn val(&self) -> &T {
         &self.node.data()
     }
-    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+    fn visit_children(self, mut v: impl TreeVisitor<T, Self>) {
         for child in self.node.children() {
             v.visit_node(IdTreeNode {
                 node: self.tree.get(child).unwrap(),
@@ -350,7 +359,7 @@ impl<'a,T> VisitableNode<T> for ego_tree::NodeRef<'a,T> {
     fn val(&self) -> &T {
         self.value()
     }
-    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+    fn visit_children(self, mut v: impl TreeVisitor<T, Self>) {
         for child in self.children() {
             v.visit_node(child);
         }
@@ -380,7 +389,7 @@ impl<'a,T> VisitableNode<T> for VecTreeNode<'a,T> {
     fn val(&self) -> &T {
         &self.tree.get(self.id).unwrap()
     }
-    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+    fn visit_children(self, mut v: impl TreeVisitor<T, Self>) {
         for child in self.tree.children(self.id) {
             v.visit_node(VecTreeNode {
                 id: child,
@@ -419,7 +428,7 @@ impl<'a,T> VisitableNode<T> for &'a NaiveNode<T> {
     fn val(&self) -> &T {
         &self.value
     }
-    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+    fn visit_children(self, mut v: impl TreeVisitor<T, Self>) {
         for child in self.children.iter() {
             v.visit_node(child);
         }
@@ -466,7 +475,7 @@ impl<'a,T> VisitableNode<T> for &'a LLNode<T> {
     fn val(&self) -> &T {
         &self.value
     }
-    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+    fn visit_children(self, mut v: impl TreeVisitor<T, Self>) {
         let mut child = &self.first_child;
         while let Some(the_child) = child {
             v.visit_node(&**the_child);
@@ -504,7 +513,7 @@ impl<'a,'bump,T> VisitableNode<T> for &'a BumpNode<'bump,T> {
     fn val(&self) -> &T {
         &self.value
     }
-    fn visit_children(self, mut v: impl TreeVisitor<T>) {
+    fn visit_children(self, mut v: impl TreeVisitor<T, Self>) {
         for child in self.children.iter() {
             v.visit_node(child);
         }
@@ -516,6 +525,15 @@ fn make_rng() -> impl Rng {
 }
 
 fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn() -> C, type_name: &'static str) where C::ValType: Hash {
+    let (hash, bfs_hash) = {
+        let tree = create_naive_tree(creator(), &mut make_rng());
+        let per_level = count_nodes_per_level(&tree);
+        println!("{}", type_name);
+        println!(" * nodes_per_level: {:?}", per_level);
+        println!(" * total: {}", per_level.iter().sum::<usize>());
+        (hash_tree(&tree), bfs_hash_tree(&tree))
+    };
+
     c.bench_function(&format!("make_{}_packed", type_name), move |b| {
         b.iter(|| {
             create_packed_tree(creator(), &mut black_box(make_rng()))
@@ -524,7 +542,13 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
     c.bench_function(&format!("hash_{}_packed", type_name), move |b| {
         let tree = create_packed_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
-            hash_tree(tree.root())
+            assert_eq!(hash_tree(black_box(tree.root())), hash);
+        });
+    });
+    c.bench_function(&format!("bfs_{}_packed", type_name), move |b| {
+        let tree = create_packed_tree(creator(), &mut black_box(make_rng()));
+        b.iter(|| {
+            assert_eq!(bfs_hash_tree(black_box(tree.root())), bfs_hash);
         });
     });
     c.bench_function(&format!("make_{}_es", type_name), move |b| {
@@ -535,7 +559,13 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
     c.bench_function(&format!("hash_{}_es", type_name), move |b| {
         let tree = create_exact_size_packed_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
-            hash_tree(tree.root())
+            assert_eq!(hash_tree(black_box(tree.root())), hash);
+        });
+    });
+    c.bench_function(&format!("bfs_{}_es", type_name), move |b| {
+        let tree = create_exact_size_packed_tree(creator(), &mut black_box(make_rng()));
+        b.iter(|| {
+            assert_eq!(bfs_hash_tree(black_box(tree.root())), bfs_hash);
         });
     });
     c.bench_function(&format!("make_{}_index", type_name), move |b| {
@@ -548,10 +578,20 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
         let mut arena = indextree::Arena::new();
         let tree = create_index_tree(creator(), &mut black_box(make_rng()), &mut arena).unwrap();
         b.iter(|| {
-            hash_tree(IndexTreeNode {
+            assert_eq!(hash_tree(black_box(IndexTreeNode {
                 id: tree,
                 arena: &arena
-            })
+            })), hash);
+        });
+    });
+    c.bench_function(&format!("bfs_{}_index", type_name), move |b| {
+        let mut arena = indextree::Arena::new();
+        let tree = create_index_tree(creator(), &mut black_box(make_rng()), &mut arena).unwrap();
+        b.iter(|| {
+            assert_eq!(bfs_hash_tree(black_box(IndexTreeNode {
+                id: tree,
+                arena: &arena
+            })), bfs_hash);
         });
     });
     c.bench_function(&format!("make_{}_id", type_name), move |b| {
@@ -562,10 +602,19 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
     c.bench_function(&format!("hash_{}_id", type_name), move |b| {
         let tree = create_id_tree(creator(), &mut black_box(make_rng())).unwrap();
         b.iter(|| {
-            hash_tree(IdTreeNode {
+            assert_eq!(hash_tree(black_box(IdTreeNode {
                 node: tree.get(tree.root_node_id().unwrap()).unwrap(),
                 tree: &tree
-            })
+            })), hash);
+        });
+    });
+    c.bench_function(&format!("bfs_{}_id", type_name), move |b| {
+        let tree = create_id_tree(creator(), &mut black_box(make_rng())).unwrap();
+        b.iter(|| {
+            assert_eq!(bfs_hash_tree(black_box(IdTreeNode {
+                node: tree.get(tree.root_node_id().unwrap()).unwrap(),
+                tree: &tree
+            })), bfs_hash);
         });
     });
     c.bench_function(&format!("make_{}_ego", type_name), move |b| {
@@ -576,7 +625,13 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
     c.bench_function(&format!("hash_{}_ego", type_name), move |b| {
         let tree = create_ego_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
-            hash_tree(tree.root())
+            assert_eq!(hash_tree(black_box(tree.root())), hash);
+        });
+    });
+    c.bench_function(&format!("bfs_{}_ego", type_name), move |b| {
+        let tree = create_ego_tree(creator(), &mut black_box(make_rng()));
+        b.iter(|| {
+            assert_eq!(bfs_hash_tree(black_box(tree.root())), bfs_hash);
         });
     });
     c.bench_function(&format!("make_{}_vec", type_name), move |b| {
@@ -587,10 +642,19 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
     c.bench_function(&format!("hash_{}_vec", type_name), move |b| {
         let tree = create_vec_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
-            hash_tree(VecTreeNode {
+            assert_eq!(hash_tree(black_box(VecTreeNode {
                 id: tree.get_root_index().unwrap(),
                 tree: &tree
-            })
+            })), hash);
+        });
+    });
+    c.bench_function(&format!("bfs_{}_vec", type_name), move |b| {
+        let tree = create_vec_tree(creator(), &mut black_box(make_rng()));
+        b.iter(|| {
+            assert_eq!(bfs_hash_tree(black_box(VecTreeNode {
+                id: tree.get_root_index().unwrap(),
+                tree: &tree
+            })), bfs_hash);
         });
     });
     c.bench_function(&format!("make_{}_naive", type_name), move |b| {
@@ -601,7 +665,13 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
     c.bench_function(&format!("hash_{}_naive", type_name), move |b| {
         let tree = create_naive_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
-            hash_tree(&tree)
+            assert_eq!(hash_tree(black_box(&tree)), hash);
+        });
+    });
+    c.bench_function(&format!("bfs_{}_naive", type_name), move |b| {
+        let tree = create_naive_tree(creator(), &mut black_box(make_rng()));
+        b.iter(|| {
+            assert_eq!(bfs_hash_tree(black_box(&tree)), bfs_hash);
         });
     });
     c.bench_function(&format!("make_{}_ll", type_name), move |b| {
@@ -612,7 +682,13 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
     c.bench_function(&format!("hash_{}_ll", type_name), move |b| {
         let tree = create_ll_tree(creator(), &mut black_box(make_rng()));
         b.iter(|| {
-            hash_tree(&tree)
+            assert_eq!(hash_tree(black_box(&tree)), hash);
+        });
+    });
+    c.bench_function(&format!("bfs_{}_ll", type_name), move |b| {
+        let tree = create_ll_tree(creator(), &mut black_box(make_rng()));
+        b.iter(|| {
+            assert_eq!(bfs_hash_tree(black_box(&tree)), bfs_hash);
         });
     });
     c.bench_function(&format!("make_{}_bump", type_name), move |b| {
@@ -628,13 +704,41 @@ fn benchmark_tree_type<C: NodeCreator + 'static>(c: &mut Criterion, creator: fn(
         bump.reset();
         let tree = create_bump_tree(creator(), &mut black_box(make_rng()), &bump);
         b.iter(|| {
-            hash_tree(&tree)
+            assert_eq!(hash_tree(black_box(&tree)), hash);
+        });
+    });
+    c.bench_function(&format!("bfs_{}_bump", type_name), move |b| {
+        let mut bump = bumpalo::Bump::new();
+        let _ = create_bump_tree(creator(), &mut black_box(make_rng()), &bump);
+        bump.reset();
+        let tree = create_bump_tree(creator(), &mut black_box(make_rng()), &bump);
+        b.iter(|| {
+            assert_eq!(bfs_hash_tree(black_box(&tree)), bfs_hash);
         });
     });
 }
 
+/*
+Current tree structures:
+small
+ * nodes_per_level: [1, 5, 25, 125]
+ * total: 156
+shallow
+ * nodes_per_level: [1, 100, 10000]
+ * total: 10101
+binary
+ * nodes_per_level: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+ * total: 65535
+wide_random
+ * nodes_per_level: [1, 78, 6766]
+ * total: 6845
+deep_random
+ * nodes_per_level: [1, 7, 5, 14, 25, 48, 131, 252, 599, 1157, 2339, 4659, 9380, 18465, 37291, 75107]
+ * total: 149480
+*/
+
 fn criterion_benchmark(c: &mut Criterion) {
-    benchmark_tree_type(c, make_flat_tree, "flat");
+    benchmark_tree_type(c, make_small_tree, "small");
     benchmark_tree_type(c, make_shallow_tree, "shallow");
     benchmark_tree_type(c, make_binary_tree, "binary");
     benchmark_tree_type(c, make_wide_random_tree, "wide_random");
